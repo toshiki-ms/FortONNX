@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+prefix=$(CDPATH= cd -- "$script_directory/.." && pwd)
+ort_library=${ONNXRUNTIME_LIBRARY:-}
+ort_libdir=${ONNXRUNTIME_LIBDIR:-}
+runtime_library_path=${FORTONNX_RUNTIME_LIBRARY_PATH:-}
+
+rpath_flags="-Wl,--disable-new-dtags -Wl,-rpath,$prefix/lib"
+if [ -n "$ort_libdir" ]; then
+  rpath_flags="$rpath_flags -Wl,-rpath,$ort_libdir"
+fi
+old_ifs=$IFS
+IFS=:
+for directory in $runtime_library_path; do
+  if [ -n "$directory" ]; then
+    rpath_flags="$rpath_flags -Wl,-rpath,$directory"
+  fi
+done
+IFS=$old_ifs
+
+case "${1:-}" in
+  --fflags)
+    printf '%s\n' "-I$prefix/include/fortonnx"
+    ;;
+  --libs)
+    if [ -n "$ort_library" ]; then
+      ort_link=$ort_library
+    elif [ -n "$ort_libdir" ]; then
+      ort_link="-L$ort_libdir -lonnxruntime"
+    else
+      ort_link=-lonnxruntime
+    fi
+    printf '%s\n' "-L$prefix/lib -lfortonnx $ort_link $rpath_flags"
+    ;;
+  --version)
+    printf '%s\n' '0.1.0'
+    ;;
+  *)
+    printf '%s\n' 'usage: fortonnx-config --fflags|--libs|--version' >&2
+    exit 2
+    ;;
+esac

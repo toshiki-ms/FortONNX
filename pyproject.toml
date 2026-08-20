@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fortonnx-export"
+version = "0.1.0"
+description = "Fail-closed JAXPR to ONNX exporter distributed with FortONNX"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "BSD-2-Clause"
+dependencies = [
+  "jax>=0.10,<0.12",
+  "numpy>=2.0",
+  "onnx>=1.22,<2",
+]
+
+[project.optional-dependencies]
+test = [
+  "onnxruntime>=1.29,<2",
+  "pytest>=8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "python/src"}
+
+[tool.setuptools.packages.find]
+where = ["python/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

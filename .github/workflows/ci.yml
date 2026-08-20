@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fortran-cpu:
+    runs-on: ubuntu-24.04
+    env:
+      ORT_VERSION: 1.29.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release hygiene
+        run: ./tools/check-release.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install "onnx==1.22.0" "onnxruntime==${ORT_VERSION}"
+      - name: Fetch matching ONNX Runtime C headers
+        run: |
+          mkdir -p "$RUNNER_TEMP/ort-include"
+          base="https://raw.githubusercontent.com/microsoft/onnxruntime/v${ORT_VERSION}/include/onnxruntime/core/session"
+          curl --fail --location "$base/onnxruntime_c_api.h" --output "$RUNNER_TEMP/ort-include/onnxruntime_c_api.h"
+          curl --fail --location "$base/onnxruntime_ep_c_api.h" --output "$RUNNER_TEMP/ort-include/onnxruntime_ep_c_api.h"
+          curl --fail --location "$base/onnxruntime_error_code.h" --output "$RUNNER_TEMP/ort-include/onnxruntime_error_code.h"
+      - name: Configure
+        run: |
+          ort_libdir=$(python -c 'import pathlib, onnxruntime; print(pathlib.Path(onnxruntime.__file__).parent / "capi")')
+          ./configure --fc gfortran --backend cpu \
+            --onnxruntime-include "$RUNNER_TEMP/ort-include" \
+            --onnxruntime-libdir "$ort_libdir"
+      - name: Build and test
+        run: |
+          make -j2 PYTHON=python
+          make test PYTHON=python
+
+  jax-export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install exporter
+        run: python -m pip install -e '.[test]'
+      - name: Test exporter
+        run: make test-python PYTHON=python

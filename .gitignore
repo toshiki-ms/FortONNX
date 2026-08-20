@@ -1,0 +1,59 @@
+# Local configuration
+/config.mk
+/config.mk.tmp
+.env
+.env.*
+!.env.example
+
+# Build products and logs
+/build/
+/build_logs/
+dist/
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exp
+*.mod
+*.smod
+
+# Generated inference artifacts
+*.onnx
+*.engine
+*.timing
+
+# Python environments, packages, and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Coverage and profiling
+.coverage
+.coverage.*
+htmlcov/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Editor, debugger, and operating-system files
+*.ses
+.vscode/
+.idea/
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
