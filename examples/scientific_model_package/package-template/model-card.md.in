@@ -1,0 +1,290 @@
+# Linear Response Demonstrator
+
+Specification: `scientific-onnx-model-package` `0.1-draft`<br>
+Package identifier: `org.fortonnx.examples.linear-response`<br>
+Package version: `example-1`<br>
+Release status: `research`<br>
+Release date: `2026-08-22`
+
+Linear Response Demonstrator is a deterministic ONNX model that maps a
+temperature anomaly and radiative forcing to an illustrative temperature
+response. It demonstrates a complete scientific model package. Its coefficients
+are not derived from observations, experiments, or simulations and are not
+scientifically validated.
+
+Responsible organization: FortONNX contributors<br>
+Contact: FortONNX project maintainers<br>
+License: BSD-2-Clause for the complete example package<br>
+Preferred citation: see `CITATION.txt`
+
+## Intended use
+
+Use this package to study ONNX package discovery, exact tensor binding, unit and
+domain metadata, artifact integrity, and known-answer verification. The
+supported operating mode is one independent invocation. Domain expertise is
+not required beyond understanding that the formula is illustrative rather than
+physical evidence.
+
+| Condition | Supported value | Evidence |
+|---|---|---|
+| Task | Package integration and verification | `known-answer-evidence` |
+| Batch size | 1 or 3 | `dynamic-batch`, `nominal` |
+| Temperature anomaly | -10 K to 10 K | Interface and verification checks |
+| Radiative forcing | -500 W m^-2 to 500 W m^-2 | Interface and verification checks |
+| Operating mode | Single-pass | `physical-response` process graph |
+| Runtime | ONNX ReferenceEvaluator from ONNX @@ONNX_VERSION@@ | `verification/reference-report.json` |
+
+## Unsupported uses
+
+- scientific prediction, calibration, inference, or publication of physical
+  results;
+- climate, weather, engineering, safety, regulatory, or policy decisions;
+- autoregressive, iterative, or coupled simulation;
+- claims outside the exact known-answer and interface behavior documented here;
+- interpretation of the coefficients as estimated physical parameters.
+
+No human oversight procedure can make this demonstrator suitable for a
+scientific decision. Replace it with a validated model and evidence package for
+such use.
+
+## Package contents
+
+Machine-readable package description: `package-description.json`<br>
+Description format: UTF-8 JSON using mapping version 1<br>
+Abstract-model mapping: `metadata/abstract-model-mapping.md`<br>
+Mapping identifier: `org.fortonnx.examples.direct-json` version 1<br>
+Mapping digest: `sha256:@@MAPPING_SHA256@@`
+
+The expected package-description digest is stored outside the description's
+digest closure in `package-description.sha256`. No publisher signature or
+authenticated release record is supplied; the detached digest detects mismatch
+only when obtained through a separately trusted channel.
+
+The detached digest-record layout is UTF-8 text version 1: algorithm name,
+one ASCII space, lowercase hexadecimal digest, one ASCII space, relative
+filename, and newline.
+
+| Artifact | Path | Role | Required | Format and version | Reader | SHA-256 |
+|---|---|---|---:|---|---|---|
+| Package description | `package-description.json` | Package index | yes | UTF-8 JSON, direct mapping 1 | JSON reader and declared mapping | detached record |
+| Model Card | `README.md` | Interpretation and documentation | yes | UTF-8 Markdown | Text reader | indexed digest |
+| Primary graph | `models/linear-response.onnx` | Inference | yes | ONNX IR 9, opset 18 | Compatible ONNX runtime | `@@MODEL_SHA256@@` |
+| Abstract mapping | `metadata/abstract-model-mapping.md` | Interpretation | yes | UTF-8 Markdown | Text reader | `@@MAPPING_SHA256@@` |
+| Known-answer data | `verification/nominal.csv` | Verification | yes | UTF-8 CSV, example layout 1 | CSV reader using declared header | `@@VERIFICATION_CSV_SHA256@@` |
+| Reference report | `verification/reference-report.json` | Verification evidence | yes | UTF-8 JSON, report 1 | JSON reader | `@@REFERENCE_REPORT_SHA256@@` |
+| Reference example | `examples/reference_run.py` | Complete executable use | yes | Python 3 source | Python, NumPy, ONNX | `@@REFERENCE_RUN_SHA256@@` |
+| Fortran example | `examples/run.f90` | Alternative executable use | no | Fortran source | Fortran compiler and compatible ONNX binding | `@@FORTRAN_SHA256@@` |
+| License | `LICENSE` | Legal terms | yes | UTF-8 plain text | Text reader | `@@LICENSE_SHA256@@` |
+| Citation | `CITATION.txt` | Citation | yes | UTF-8 plain text | Text reader | `@@CITATION_SHA256@@` |
+
+There are no external artifacts, alternative serializations, custom operators,
+or ONNX external-data files.
+
+Detached files `package-description.sha256`, `conformance-report.json`, and
+`conformance-report.sha256` are produced after the indexed digest closure. They
+are not required for inference.
+
+## Quick start
+
+1. Obtain `package-description.sha256` from a trusted channel and verify the
+   exact bytes of `package-description.json`.
+2. Read `package-description.json` using the declared direct JSON mapping and
+   verify every indexed byte size and SHA-256 digest.
+3. Read the physical known-answer values from `verification/nominal.csv`.
+4. Bind the two input arrays to the exact ONNX names `temperature_anomaly` and
+   `radiative_forcing`.
+5. Load `models/linear-response.onnx` and run one inference invocation.
+6. Interpret `temperature_response` directly in kelvin; no external transform
+   is applied.
+7. Compare each result with the expected CSV column using
+   `1e-6 K + 1e-6 * abs(expected)`.
+
+The complete reference command is:
+
+```sh
+python3 examples/reference_run.py .
+```
+
+`examples/run.f90` performs the same known-answer check using a Fortran ONNX
+binding. The binding is an example consumer and is not required by this
+package's scientific contract.
+
+## Inputs and outputs
+
+### ONNX interface
+
+| ONNX name | Direction | Role | Element type | ONNX logical shape | Axes | External transform |
+|---|---|---|---|---|---|---|
+| `temperature_anomaly` | input | physical predictor | `tensor(float)` | `[batch, 1]` | batch, scalar | none |
+| `radiative_forcing` | input | physical forcing | `tensor(float)` | `[batch, 1]` | batch, scalar | none |
+| `temperature_response` | output | physical response | `tensor(float)` | `[batch, 1]` | batch, scalar | none |
+
+### Scientific quantities
+
+| Tensor | Quantity | Physical units | Graph units | Convention |
+|---|---|---|---|---|
+| `temperature_anomaly` | Temperature anomaly relative to an unspecified reference | K | K | Positive is warmer |
+| `radiative_forcing` | Illustrative radiative forcing | W m^-2 | W m^-2 | Positive increases response |
+| `temperature_response` | Illustrative temperature response | K | K | Positive is warming |
+
+The unspecified anomaly reference state is acceptable only because no physical
+prediction is claimed. A scientific model would have to define it exactly.
+
+### Domain coverage
+
+| Tensor | Admissible domain | Training support | Evaluated support | Intended-use support |
+|---|---|---|---|---|
+| `temperature_anomaly` | finite float32, -100 K to 100 K | no training | exact CSV cases | -10 K to 10 K |
+| `radiative_forcing` | finite float32, -2000 W m^-2 to 2000 W m^-2 | no training | exact CSV cases | -500 W m^-2 to 500 W m^-2 |
+| `temperature_response` | finite float32 output | no training | exact CSV cases | package testing only |
+
+`batch` is dynamic and positive. The admissible interface is broader than the
+tested and intended-use domains. Only batch sizes 1 and 3 are verified.
+
+Missing values, masks, padding, NaNs, and infinities are unsupported. Inputs
+containing them must be rejected before inference. Values outside the intended
+domain are not supported even if the ONNX runtime accepts them.
+
+Shapes above are in ONNX logical order. In the packaged Fortran example,
+`[batch, 1]` is stored as `(1, batch)`.
+
+## Transformations and effective process
+
+External preprocessing consists only of `validate-inputs`, which rejects
+non-finite values and values outside `interface-domain`. There is no
+normalization, unit conversion, feature construction, or external
+postprocessing. The ONNX graph contains `linear-response-equation`:
+
+```text
+temperature_response = 0.8 * temperature_anomaly
+                     + 0.01 * radiative_forcing
+```
+
+where the forcing coefficient has units K m^2 W^-1. ONNX float32 rounding is
+part of the graph's numerical behavior.
+
+The effective process graph is:
+
+```text
+physical temperature anomaly --+
+                               +-> validate -> ONNX linear-response -> physical response
+physical radiative forcing ----+
+```
+
+The validation boundary rejects non-finite or inadmissible values. It is a
+consumer responsibility outside ONNX and is not duplicated inside the graph.
+
+## Coordinates, time, and coupling
+
+The three tensors are non-spatial scalar samples. They have no coordinate
+reference system, grid, mesh, timestamp, accumulation interval, boundary
+condition, persistent state, or coupling contract. Samples in a batch are
+independent. Iterative and coupled use is unsupported.
+
+## Scientific validation
+
+| Claim | Domain | Metric | Result | Baseline | Criterion | Conclusion | Evidence |
+|---|---|---|---:|---:|---:|---|---|
+| `known-answer-behavior`: The ONNX graph reproduces the declared formula for the three nominal cases | `verification-domain` | maximum absolute error, K | `@@MAX_ERROR@@` | Direct float32 formula | `<= 1e-6 K + 1e-6 * abs(expected)` | passed | `known-answer-evidence`; `verification/reference-report.json` |
+| `scientific-validity`: The coefficients provide a scientifically valid physical prediction | none | not defined | not evaluated | none | none | not supported | `scientific-validity-evidence` |
+
+The nominal result uses three independent table rows. The dynamic-shape result
+uses batch size 1. No sampling uncertainty interval is applicable to the
+deterministic known-answer comparison. The analytical expression is the
+reference, with float32 rounding as the only stated reference uncertainty.
+
+Passing this comparison is package verification, not scientific validation.
+No source-model accuracy, physical conservation, calibration, out-of-domain,
+long-horizon, or operational evaluation has been performed.
+
+## Verification
+
+`nominal` reads all three CSV rows and checks nonzero, mixed-sign values.
+`dynamic-batch` reads the first row and checks batch size 1. Both use ONNX
+ReferenceEvaluator from ONNX @@ONNX_VERSION@@ under Python @@PYTHON_VERSION@@,
+CPU, float32, with no fallback or custom operators.
+
+The generator also swaps the two same-shaped input arrays as a negative
+integration control. The documented comparison rejects the perturbed mapping;
+the minimum detected error is `@@PERTURBATION_ERROR@@` K.
+
+The absolute tolerance is larger than the observed float32 rounding difference
+but small enough to detect skipped coefficients, swapped inputs, or an incorrect
+graph. Relative tolerance prevents an unnecessarily strict comparison as output
+magnitude grows.
+
+## Limitations and failure modes
+
+- The coefficients are arbitrary demonstration constants.
+- There is no training data, physical reference dataset, baseline model,
+  measurement uncertainty, or predictive uncertainty.
+- Only three nominal rows and two batch sizes are verified.
+- Values may be numerically accepted outside the intended-use domain without a
+  detectable output flag.
+- The graph does not enforce input-domain or finite-value checks.
+- No spatial, temporal, iterative, coupled, stochastic, accelerator, or custom
+  operator behavior is evaluated.
+
+Failure outside the known-answer checks cannot be inferred reliably from the
+output. No out-of-domain detector is provided.
+
+Unknown behavior includes every untested input shape, runtime, provider,
+precision, platform, and scientific condition outside the stated cases.
+
+## Data and model provenance
+
+The model is assembled directly by
+`examples/scientific_model_package/build_package.py`. It is not trained. The
+initializers contain the literal float32 coefficients 0.8 and 0.01. There are no
+source simulations, observations, experiments, instruments, dataset splits,
+hyperparameter trials, checkpoints, or fitted transformation parameters.
+
+The builder uses ONNX @@ONNX_VERSION@@ and NumPy to construct an opset-18 graph,
+sets ONNX IR version 9, runs the ONNX checker, and executes the known-answer
+cases with the ONNX reference evaluator. The graph digest is
+`sha256:@@MODEL_SHA256@@`.
+
+## Runtime and compatibility
+
+| Configuration | Runtime | Hardware | Precision | Shapes | Fallback | Verification |
+|---|---|---|---|---|---|---|
+| `onnx-reference-cpu` | ONNX @@ONNX_VERSION@@ ReferenceEvaluator | CPU | float32 | `[1,1]`, `[3,1]` | none | passed |
+
+ONNX IR version: 9<br>
+Opset imports: default domain version 18<br>
+Custom operators: none<br>
+External ONNX data: none<br>
+Determinism: deterministic for the verified reference configuration
+
+No accelerator, performance, latency, throughput, or memory claim is made.
+
+## Conformance profiles
+
+| Profile | Decision | Status | Reason or evidence |
+|---|---|---|---|
+| `core` | applicable | conforming | detached self-check report |
+| `single-pass` | applicable | conforming | `physical-response` process graph |
+| `iterative` | not applicable | not tested | output reuse is unsupported |
+| `coupled` | not applicable | not tested | no external exchange |
+| `spatial` | not applicable | not tested | scalar non-spatial quantities |
+| `multi-graph` | not applicable | not tested | one ONNX graph |
+| `custom-operator` | not applicable | not tested | standard ONNX operators only |
+| `external-artifact` | not applicable | not tested | all required artifacts packaged |
+| `stochastic` | not applicable | not tested | deterministic graph |
+| `scientifically-validated` | not applicable | not tested | no validation claim |
+| `training-reproducible` | not applicable | not tested | no training claim |
+| `operational` | not applicable | not tested | no deployment claim |
+
+The detached `conformance-report.json` records structural conformance and known-
+answer verification separately from scientific validation. It is a self-check
+produced by the example builder, not an independent certification.
+
+## Maintenance and change history
+
+Support contact: FortONNX project maintainers<br>
+Deprecation policy: follows the source example containing the builder<br>
+Change classification: initial example package
+
+Changes to graph bytes, tensor meaning, formula, verification values, or
+required artifacts require a different example package version. This package
+does not change the FortONNX project release version.

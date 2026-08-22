@@ -203,6 +203,41 @@ See `examples/multi_model_cpu.f90` for a runtime containing several named
 models. CPU parallelism is controlled by ONNX Runtime; the Fortran source does
 not require OpenMP.
 
+## Scientific model package example
+
+`examples/scientific_model_package/` builds an ordinary linear ONNX graph as a
+complete scientific package. The generated directory includes a Model Card,
+format-declared machine-readable description, artifact digests, known-answer
+cases, a reference verification report, and Python and Fortran execution
+examples. The ONNX graph requires no special runtime behavior.
+
+Generate only the package files with:
+
+```sh
+make scientific-package-files PYTHON=python3
+```
+
+Validate the generated package, rerun its known-answer cases, and write JSON
+and text reports with:
+
+```sh
+make scientific-package-validate PYTHON=python3
+```
+
+The generated digest record demonstrates local consistency. A release decision
+must supply the expected package-description digest through a separately
+trusted channel.
+
+With a configured CPU build, generate the package and run its Fortran
+known-answer check with:
+
+```sh
+make scientific-package-example PYTHON=python3 BACKEND=cpu
+```
+
+See the [example instructions](examples/scientific_model_package/README.md) and
+[scientific package specification](docs/scientific-model-package/README.md).
+
 ## CUDA and TensorRT
 
 Build the same runtime with a GPU execution provider:
@@ -277,14 +312,20 @@ See `docs/jax-export.md`.
 ```text
 src/                  portable Fortran API and C bridge
 python/               separately installable JAX exporter
-examples/             small application programs
+examples/             applications and scientific package example
 tests/                deterministic CPU and exporter tests
-docs/                 tensor, backend, ownership, and compatibility details
+docs/                 runtime details and scientific model-package specification
 make/compiler/        compiler-specific flags
 ```
 
 Build products, ONNX models, TensorRT engines, timing caches, and provider
 libraries are intentionally excluded from version control.
+
+An ONNX graph intended for scientific distribution should be accompanied by
+units, coordinates, transformations, provenance, validation evidence, and a
+known-answer case. See the [scientific ONNX model package
+specification](docs/scientific-model-package/README.md) for the package
+requirements, conformance rules, and Model Card template.
 
 Before creating a source release, follow `RELEASE.md`; in particular run
 `make distclean` and `make release-check`. Locally compiled binaries must not be

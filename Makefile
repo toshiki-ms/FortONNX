@@ -42,7 +42,7 @@ else
 $(error BACKEND must be cpu, cuda, or tensorrt)
 endif
 
-ORT_OPTIONAL_GOALS := configure clean distclean release-check test-python
+ORT_OPTIONAL_GOALS := configure clean distclean release-check test-python scientific-package-files scientific-package-validate
 ifneq ($(strip $(MAKECMDGOALS)),)
 ifeq ($(strip $(filter-out $(ORT_OPTIONAL_GOALS),$(MAKECMDGOALS))),)
 SKIP_ORT_CHECK := 1
@@ -77,6 +77,21 @@ OBJ_DIR := $(NATIVE_DIR)/obj
 LIB_DIR := $(NATIVE_DIR)/lib
 BIN_DIR := $(NATIVE_DIR)/bin
 TEST_DIR := $(BUILD_DIR)/test
+SCIENTIFIC_PACKAGE_SOURCE_DIR := examples/scientific_model_package
+SCIENTIFIC_PACKAGE_DIR := $(BUILD_DIR)/examples/scientific_model_package
+SCIENTIFIC_PACKAGE_DESCRIPTION := $(SCIENTIFIC_PACKAGE_DIR)/package-description.json
+SCIENTIFIC_PACKAGE_DESCRIPTION_DIGEST := $(SCIENTIFIC_PACKAGE_DIR)/package-description.sha256
+SCIENTIFIC_PACKAGE_VALIDATOR := $(SCIENTIFIC_PACKAGE_SOURCE_DIR)/validate_package.py
+SCIENTIFIC_PACKAGE_VALIDATION_REPORT := $(BUILD_DIR)/examples/scientific_model_package-validation.json
+SCIENTIFIC_PACKAGE_VALIDATION_SUMMARY := $(BUILD_DIR)/examples/scientific_model_package-validation.txt
+SCIENTIFIC_PACKAGE_SOURCES := \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/build_package.py \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/reference_run.py \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/run.f90 \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/package-template/model-card.md.in \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/package-template/metadata/abstract-model-mapping.md \
+	$(SCIENTIFIC_PACKAGE_SOURCE_DIR)/package-template/verification/nominal.csv \
+	LICENSE
 
 C_OBJECTS := \
 	$(OBJ_DIR)/fortonnx_ort.o \
@@ -103,7 +118,7 @@ ORT_PROVIDER_NAMES := $(foreach provider,$(ORT_PROVIDER_CANDIDATES),$(if $(wildc
 ORT_PROVIDER_LINKS := $(addprefix $(LIB_DIR)/,$(ORT_PROVIDER_NAMES))
 endif
 
-.PHONY: all configure clean distclean release-check install uninstall examples test test-gpu test-python info
+.PHONY: all configure clean distclean release-check install uninstall examples test test-gpu test-python info scientific-package-files scientific-package-example scientific-package-validate
 
 all: $(LIB_STATIC) $(LIB_SHARED) $(ORT_RUNTIME_LINK) $(ORT_PROVIDER_LINKS)
 
@@ -153,7 +168,28 @@ $(BIN_DIR)/cpu_minimal: examples/cpu_minimal.f90 $(LIB_STATIC) $(ORT_RUNTIME_LIN
 $(BIN_DIR)/multi_model_cpu: examples/multi_model_cpu.f90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) | $(BIN_DIR)
 	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
 
-examples: $(BIN_DIR)/cpu_minimal $(BIN_DIR)/multi_model_cpu
+$(BIN_DIR)/scientific_package_cpu: $(SCIENTIFIC_PACKAGE_SOURCE_DIR)/run.f90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) | $(BIN_DIR)
+	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
+
+examples: $(BIN_DIR)/cpu_minimal $(BIN_DIR)/multi_model_cpu $(BIN_DIR)/scientific_package_cpu
+
+$(SCIENTIFIC_PACKAGE_DESCRIPTION): $(SCIENTIFIC_PACKAGE_SOURCES) | $(BUILD_DIR)
+	$(PYTHON) $(SCIENTIFIC_PACKAGE_SOURCE_DIR)/build_package.py --replace $(SCIENTIFIC_PACKAGE_DIR)
+
+$(SCIENTIFIC_PACKAGE_DESCRIPTION_DIGEST): $(SCIENTIFIC_PACKAGE_DESCRIPTION)
+	$(PYTHON) $(SCIENTIFIC_PACKAGE_SOURCE_DIR)/build_package.py --replace $(SCIENTIFIC_PACKAGE_DIR)
+
+scientific-package-files: $(SCIENTIFIC_PACKAGE_DESCRIPTION)
+
+scientific-package-validate: $(SCIENTIFIC_PACKAGE_DESCRIPTION_DIGEST) $(SCIENTIFIC_PACKAGE_VALIDATOR)
+	$(PYTHON) $(SCIENTIFIC_PACKAGE_VALIDATOR) $(SCIENTIFIC_PACKAGE_DIR) \
+		--expected-description-digest-file $(SCIENTIFIC_PACKAGE_DESCRIPTION_DIGEST) \
+		--run-verification \
+		--report $(SCIENTIFIC_PACKAGE_VALIDATION_REPORT) \
+		--summary $(SCIENTIFIC_PACKAGE_VALIDATION_SUMMARY)
+
+scientific-package-example: $(SCIENTIFIC_PACKAGE_DESCRIPTION) $(BIN_DIR)/scientific_package_cpu
+	$(BIN_DIR)/scientific_package_cpu $(SCIENTIFIC_PACKAGE_DIR)
 
 $(TEST_DIR)/linear.onnx: tests/make_test_model.py | $(TEST_DIR)
 	$(PYTHON) $< $@

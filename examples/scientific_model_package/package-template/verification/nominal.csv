@@ -1,0 +1,4 @@
+temperature_anomaly_k,radiative_forcing_w_m2,expected_temperature_response_k
+0.0,100.0,1.0
+2.0,-50.0,1.1
+-1.5,300.0,1.8
