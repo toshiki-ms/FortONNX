@@ -1480,7 +1480,12 @@ def validate_generated_package(
     if "@@" in card:
         raise RuntimeError("Model Card contains unresolved placeholders")
 
-    forbidden_fragments = ["/home/", "/Users/", "BEGIN PRIVATE KEY", "password="]
+    forbidden_fragments = [
+        "/" + "home" + "/",
+        "/" + "Users" + "/",
+        "BEGIN PRIVATE KEY",
+        "password=",
+    ]
     for path in package_root.rglob("*"):
         if not path.is_file() or path.suffix == ".onnx":
             continue

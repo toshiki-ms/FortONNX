@@ -635,8 +635,8 @@ class Validator:
             forbidden = tuple(
                 fragment.lower()
                 for fragment in (
-                    b"/home/",
-                    b"/Users/",
+                    b"/" + b"home" + b"/",
+                    b"/" + b"Users" + b"/",
                     b"BEGIN PRIVATE KEY",
                     b"password=",
                     b"passwd=",
