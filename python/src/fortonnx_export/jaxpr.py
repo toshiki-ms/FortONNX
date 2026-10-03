@@ -152,6 +152,7 @@ class _Translator:
         opset: int,
         dynamic_axes: Mapping[str, Mapping[int, str]],
         input_names: Sequence[str],
+        custom_calls: Mapping[str, tuple[str, str]] | None = None,
     ) -> None:
         if opset < 18:
             raise ValueError("the generic exporter requires ONNX opset >= 18")
@@ -162,6 +163,8 @@ class _Translator:
         self.counter = 0
         self.primitive_counts: dict[str, int] = {}
         self.symbol_sources: dict[str, tuple[str, int, int]] = {}
+        self.custom_calls = dict(custom_calls or {})
+        self.custom_domains: set[str] = set()
         for name in input_names:
             for axis, symbol in dynamic_axes.get(name, {}).items():
                 if symbol in self.symbol_sources:
@@ -206,13 +209,15 @@ class _Translator:
         op_type: str,
         inputs: Sequence[str],
         outputs: Sequence[str],
+        domain: str | None = None,
         **attributes: Any,
     ) -> None:
-        self.nodes.append(helper.make_node(op_type, list(inputs), list(outputs), **attributes))
+        self.nodes.append(helper.make_node(op_type, list(inputs), list(outputs), domain=domain, **attributes))
 
     def _set_input_symbol_examples(
         self, input_values: Sequence[_Value], input_names: Sequence[str]
     ) -> None:
+        self.input_shapes = {name: _shape(value.aval) for value, name in zip(input_values, input_names)}
         for value, name in zip(input_values, input_names):
             for axis, symbol in value.dynamic_axes.items():
                 source = self.symbol_sources.get(symbol)
@@ -496,6 +501,8 @@ class _Translator:
             return self.translate_while(equation, inputs)
         if primitive == "top_k":
             return self.translate_top_k(equation, inputs)
+        if primitive == "ffi_call":
+            return self.translate_ffi_call(equation, inputs)
         if len(equation.outvars) != 1:
             raise self.unsupported(equation, "multiple outputs are not implemented")
         outvar = equation.outvars[0]
@@ -620,6 +627,8 @@ class _Translator:
             return [self.translate_reverse(equation, inputs[0], outvar)]
         if primitive == "concatenate":
             return [self.translate_concatenate(equation, inputs, outvar)]
+        if primitive == "stack":
+            return [self.translate_stack(equation, inputs, outvar)]
         if primitive == "pad":
             return [self.translate_pad(equation, inputs, outvar)]
         if primitive == "gather":
@@ -1274,14 +1283,32 @@ class _Translator:
             self.add_node("Sqrt", [value.name], [square_root])
             self.add_node("Reciprocal", [square_root], [output.name])
             return output
-        one = self.add_initializer(np.asarray(1, dtype=_dtype(value.aval)), f"{primitive}_one")
-        intermediate = self.fresh(f"{primitive}_intermediate")
+        # Rounding-accurate forms (Goldberg / Kahan) with ONNX primitives only:
+        #   log1p(x) = x                         if fl(1+x) == 1
+        #            = log(u) * x / (u - 1)       with u = fl(1+x)   otherwise
+        #   expm1(x) = x                         if fl(exp(x)) == 1
+        #            = (u - 1) * x / log(u)       with u = fl(exp(x)) otherwise
+        # A plain log(1+x) / exp(x)-1 loses all digits for |x| below the dtype epsilon.
+        dtype = _dtype(value.aval)
+        one = self.add_initializer(np.asarray(1, dtype=dtype), f"{primitive}_one")
+        u, d, logu, num, den, safe, ratio, is_one = (self.fresh(f"{primitive}_{tag}") for tag in
+                                                      ("u", "d", "log", "num", "den", "safe", "ratio", "is_one"))
         if primitive == "log1p":
-            self.add_node("Add", [value.name, one], [intermediate])
-            self.add_node("Log", [intermediate], [output.name])
+            self.add_node("Add", [value.name, one], [u])
+            self.add_node("Sub", [u, one], [d])
+            self.add_node("Log", [u], [logu])
+            self.add_node("Mul", [logu, value.name], [num])
+            den_source = d
         else:
-            self.add_node("Exp", [value.name], [intermediate])
-            self.add_node("Sub", [intermediate, one], [output.name])
+            self.add_node("Exp", [value.name], [u])
+            self.add_node("Sub", [u, one], [d])
+            self.add_node("Log", [u], [logu])
+            self.add_node("Mul", [d, value.name], [num])
+            den_source = logu
+        self.add_node("Equal", [u, one], [is_one])
+        self.add_node("Where", [is_one, one, den_source], [safe])
+        self.add_node("Div", [num, safe], [ratio])
+        self.add_node("Where", [is_one, value.name, ratio], [output.name])
         return output
 
     def translate_call(self, equation: Any, inputs: Sequence[_Value]) -> list[_Value]:
@@ -1357,9 +1384,64 @@ class _Translator:
             self.add_node("Unsqueeze", [current, axes_name], [unsqueezed])
             current = unsqueezed
         output = self.make_value(outvar, "broadcast", dynamic)
-        shape_name = self.shape_tensor(output_shape, dynamic, "broadcast")
-        self.add_node("Expand", [current, shape_name], [output.name])
+        operand_dynamic = {dimensions[axis] for axis in value.dynamic_axes}
+        new_dynamic = {axis: symbol for axis, symbol in dynamic.items() if axis not in operand_dynamic}
+        zero_source = self.batch_zeros(new_dynamic, len(output_shape), _dtype(outvar.aval)) if new_dynamic else None
+        if new_dynamic and zero_source is None:
+            shape_name = self.shape_tensor(output_shape, dynamic, "broadcast")
+            self.add_node("Expand", [current, shape_name], [output.name])
+            return output
+        # Static Expand shape: a dynamic axis is 1 (kept from the operand by multidirectional broadcasting, or
+        # supplied by an exact-zero batch column), so no Shape/Gather/Concat subgraph is needed.
+        static_shape = [1 if axis in dynamic else int(size) for axis, size in enumerate(output_shape)]
+        shape_name = self.add_initializer(np.asarray(static_shape, dtype=np.int64), "broadcast_shape")
+        if zero_source is None:
+            self.add_node("Expand", [current, shape_name], [output.name])
+        else:
+            expanded = self.fresh("broadcast_static")
+            self.add_node("Expand", [current, shape_name], [expanded])
+            empty_axes = [axis for axis, size in enumerate(output_shape) if axis not in dynamic and int(size) == 0]
+            if empty_axes:   # broadcasting a length-1 axis against length 0 must give length 0
+                names = [self.add_initializer(np.asarray(v, dtype=np.int64), f"broadcast_empty_{t}") for t, v in
+                         (("starts", [0]*len(empty_axes)), ("ends", [0]*len(empty_axes)), ("axes", empty_axes))]
+                emptied = self.fresh("batch_zeros_empty")
+                self.add_node("Slice", [zero_source, *names], [emptied])
+                zero_source = emptied
+            self.add_node("Or" if _dtype(outvar.aval) == np.bool_ else "Add", [expanded, zero_source], [output.name])
         return output
+
+    def batch_zeros(self, new_dynamic: Mapping[int, str], rank: int, dtype: Any) -> str | None:
+        """Exact zeros of shape (n, 1, ..., 1) taken from the graph input that defines the batch symbol.
+
+        Greater(x, x) is false for every value including NaN and infinities, so Cast gives exact zeros without
+        Shape/ConstantOfShape (which ONNX Runtime keeps on the CPU). Only the leading axis is supported.
+        """
+        if set(new_dynamic) != {0}:
+            return None
+        symbol = new_dynamic[0]
+        if symbol not in self.symbol_sources:
+            return None
+        source_name, source_axis, _ = self.symbol_sources[symbol]
+        if source_axis != 0:
+            return None
+        source_rank = len(getattr(self, "input_shapes", {}).get(source_name, ()))
+        if source_rank < 1:
+            return None
+        current = source_name
+        if source_rank > 1:
+            names = [self.add_initializer(np.asarray(v, dtype=np.int64), f"batch_zeros_{t}") for t, v in
+                     (("starts", [0]*(source_rank-1)), ("ends", [1]*(source_rank-1)), ("axes", list(range(1, source_rank))))]
+            sliced = self.fresh("batch_zeros_slice")
+            self.add_node("Slice", [current, *names], [sliced])
+            current = sliced
+        shape = self.add_initializer(np.asarray([0] + [1]*(rank-1), dtype=np.int64), "batch_zeros_shape")
+        reshaped = self.fresh("batch_zeros_reshape")
+        self.add_node("Reshape", [current, shape], [reshaped], allowzero=0)
+        flag = self.fresh("batch_zeros_false")
+        self.add_node("Greater", [reshaped, reshaped], [flag])
+        zeros = self.fresh("batch_zeros")
+        self.add_node("Cast", [flag], [zeros], to=_onnx_dtype(dtype))
+        return zeros
 
     def translate_reshape(self, equation: Any, value: _Value, outvar: Any) -> _Value:
         if equation.params.get("dimensions") is not None:
@@ -1368,6 +1450,12 @@ class _Translator:
         dynamic: dict[int, str] = {}
         input_shape = _shape(value.aval)
         for input_axis, symbol in value.dynamic_axes.items():
+            if (input_axis == 0 and output_shape and output_shape[0] == input_shape[0]
+                    and int(np.prod(input_shape[1:])) == int(np.prod(output_shape[1:]))):
+                # Row-major reshape of the trailing axes only: the leading (batch) axis is carried unchanged,
+                # even when a trailing output axis happens to have the same example size.
+                dynamic[0] = symbol
+                continue
             matches = [axis for axis, size in enumerate(output_shape) if size == input_shape[input_axis]]
             if len(matches) == 1:
                 dynamic[matches[0]] = symbol
@@ -1376,6 +1464,11 @@ class _Translator:
                     equation, f"cannot preserve dynamic dimension {symbol!r} through reshape"
                 )
         output = self.make_value(outvar, "reshape", dynamic)
+        if set(dynamic) == {0} and set(value.dynamic_axes) == {0} and all(int(d) > 0 for d in output_shape[1:]):
+            # ONNX Reshape copies a 0 entry from the input (allowzero=0): no Shape subgraph for the batch axis.
+            shape_name = self.add_initializer(np.asarray([0] + [int(d) for d in output_shape[1:]], dtype=np.int64), "reshape_shape")
+            self.add_node("Reshape", [value.name, shape_name], [output.name], allowzero=0)
+            return output
         shape_name = self.shape_tensor(output_shape, dynamic, "reshape")
         self.add_node("Reshape", [value.name, shape_name], [output.name], allowzero=0)
         return output
@@ -1434,6 +1527,63 @@ class _Translator:
         output = self.make_value(outvar, "concatenate", dynamic)
         self.add_node("Concat", [value.name for value in inputs], [output.name], axis=axis)
         return output
+
+    def translate_stack(self, equation: Any, inputs: Sequence[_Value], outvar: Any) -> _Value:
+        """jnp.stack: Unsqueeze every operand at the new axis, then Concat along it."""
+        axis = int(equation.params["axis"])
+        rank = len(_shape(outvar.aval))
+        if axis < 0:
+            axis += rank
+        dynamic: dict[int, str] = {}
+        for value in inputs:
+            for input_axis, symbol in value.dynamic_axes.items():
+                output_axis = input_axis + (1 if input_axis >= axis else 0)
+                if dynamic.setdefault(output_axis, symbol) != symbol:
+                    raise self.unsupported(equation, "incompatible dynamic stack inputs")
+        axes_name = self.add_initializer(np.asarray([axis], dtype=np.int64), "stack_axis")
+        pieces = []
+        for value in inputs:
+            unsqueezed = self.fresh("stack_operand")
+            self.add_node("Unsqueeze", [value.name, axes_name], [unsqueezed])
+            pieces.append(unsqueezed)
+        output = self.make_value(outvar, "stack", dynamic)
+        self.add_node("Concat", pieces, [output.name], axis=axis)
+        return output
+
+    def translate_ffi_call(self, equation: Any, inputs: Sequence[_Value]) -> list[_Value]:
+        """An XLA FFI call becomes a custom-domain ONNX node, only when the caller maps its target explicitly.
+
+        The runtime must provide the operator (e.g. an ONNX Runtime custom-op library for the selected
+        execution provider). Scalar integer/float FFI attributes become ONNX attributes of the same name.
+        A dynamic leading axis of the first operand is carried to every output with the same leading size.
+        """
+        target = str(equation.params.get("target_name"))
+        if target not in self.custom_calls:
+            raise self.unsupported(equation, f"FFI target {target!r} has no custom_calls mapping")
+        if equation.params.get("has_side_effect") or equation.params.get("input_output_aliases"):
+            raise self.unsupported(equation, "side-effecting or aliasing FFI calls are not exportable")
+        domain, op_type = self.custom_calls[target]
+        attributes: dict[str, Any] = {}
+        for name, value in equation.params.get("attributes", ()):
+            array = np.asarray(value)
+            if array.shape != ():
+                raise self.unsupported(equation, f"non-scalar FFI attribute {name!r}")
+            if np.issubdtype(array.dtype, np.integer) or array.dtype == np.bool_:
+                attributes[str(name)] = int(array)
+            elif np.issubdtype(array.dtype, np.floating):
+                attributes[str(name)] = float(array)
+            else:
+                raise self.unsupported(equation, f"unsupported FFI attribute type for {name!r}")
+        lead = inputs[0].dynamic_axes.get(0) if inputs else None
+        lead_size = _shape(inputs[0].aval)[0] if inputs and _shape(inputs[0].aval) else None
+        outputs = []
+        for outvar in equation.outvars:
+            shape = _shape(outvar.aval)
+            dynamic = {0: lead} if lead is not None and shape and shape[0] == lead_size else {}
+            outputs.append(self.make_value(outvar, f"{op_type}", dynamic))
+        self.add_node(op_type, [value.name for value in inputs], [value.name for value in outputs], domain=domain, **attributes)
+        self.custom_domains.add(domain)
+        return outputs
 
     def translate_pad(self, equation: Any, inputs: Sequence[_Value], outvar: Any) -> _Value:
         if len(inputs) != 2:
@@ -2124,6 +2274,8 @@ def export_jax_to_onnx(
     producer_name: str = "fortonnx_export.jaxpr",
     metadata: Mapping[str, str] | None = None,
     check_model: bool = True,
+    ir_version: int | None = None,
+    custom_calls: Mapping[str, tuple[str, str]] | None = None,
 ) -> ExportResult:
     """Trace a pure JAX function and export its supported inference graph.
 
@@ -2157,7 +2309,7 @@ def export_jax_to_onnx(
                     configured_dynamic.setdefault(name, {}).setdefault(0, "batch")
 
     translator = _Translator(
-        opset=opset, dynamic_axes=configured_dynamic, input_names=names
+        opset=opset, dynamic_axes=configured_dynamic, input_names=names, custom_calls=custom_calls
     )
     graph_inputs: list[onnx.ValueInfoProto] = []
     input_values: list[_Value] = []
@@ -2203,10 +2355,16 @@ def export_jax_to_onnx(
         graph_outputs,
         initializer=translator.initializers,
     )
+    opset_imports = [helper.make_opsetid("", opset)] + [
+        helper.make_opsetid(domain, 1) for domain in sorted(translator.custom_domains)
+    ]
     model = helper.make_model(
         graph,
         producer_name=producer_name,
-        opset_imports=[helper.make_opsetid("", opset)],
+        opset_imports=opset_imports,
+        # Declare the IR version the opset requires, not the newest one the installed onnx package knows,
+        # so a newer onnx package does not make the model unloadable by runtimes that support the opset.
+        ir_version=(helper.find_min_ir_version_for(opset_imports[:1]) if ir_version is None else int(ir_version)),
     )
     properties = {
         "exporter": "fail_closed_jaxpr_to_onnx",
@@ -2265,6 +2423,8 @@ def supported_primitives() -> tuple[str, ...]:
         "rev",
         "rsqrt",
         "select_n",
+        "stack",
+        "ffi_call",
         "scan",
         "scatter",
         "scatter-add",
