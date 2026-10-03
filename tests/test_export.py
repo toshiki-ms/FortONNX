@@ -977,3 +977,66 @@ def test_generic_export_handles_static_fori_and_scan_without_xs(
             np.testing.assert_allclose(
                 actual_leaf, np.asarray(expected_leaf), rtol=3.0e-6, atol=3.0e-6
             )
+
+
+def test_generic_export_handles_stack_batch_reshape_and_accurate_log1p(tmp_path: Path) -> None:
+    weight = jax.random.normal(jax.random.PRNGKey(7), (6, 24), dtype=jnp.float32) / 3.0
+
+    def model(inputs: jax.Array) -> jax.Array:
+        stacked = jnp.stack(
+            [inputs[:, 0], 2.0 * inputs[:, 1], jnp.log1p(inputs[:, 2]), jnp.expm1(inputs[:, 3])], axis=1
+        )
+        grouped = (inputs @ weight).reshape(inputs.shape[0], 2, 3, 4)
+        return jnp.concatenate([stacked, grouped.sum(axis=(1, 2))], axis=1)
+
+    path = tmp_path / "stack_reshape.onnx"
+    # The example batch (4) equals a trailing reshape size: the leading axis must still be the dynamic batch.
+    export_jax_to_onnx(
+        model, (jax.ShapeDtypeStruct((4, 6), jnp.float32),), path,
+        input_names=("x",), output_names=("y",),
+    )
+    session = _session(path)
+    for batch in (4, 5, 9):
+        x = np.asarray(jax.random.normal(jax.random.PRNGKey(batch), (batch, 6)), np.float32) * 0.5
+        x[:, 2] = np.abs(x[:, 2])
+        x[: min(batch, 3), 2] = np.asarray([1e-12, 3e-9, 2e-7], np.float32)[: min(batch, 3)]
+        x[: min(batch, 3), 3] = np.asarray([-1e-12, 4e-9, -3e-7], np.float32)[: min(batch, 3)]
+        (actual,) = session.run(None, {"x": x})
+        expected = np.asarray(model(jnp.asarray(x)))
+        np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=1e-6)
+        tiny = slice(0, min(batch, 3))
+        np.testing.assert_allclose(actual[tiny, 2], np.log1p(x[tiny, 2].astype(np.float64)), rtol=2e-7)
+        np.testing.assert_allclose(actual[tiny, 3], np.expm1(x[tiny, 3].astype(np.float64)), rtol=2e-7)
+
+
+def test_generic_export_declares_minimum_ir_version_for_opset(tmp_path: Path) -> None:
+    path = tmp_path / "ir.onnx"
+    export_jax_to_onnx(lambda x: jnp.tanh(x), (jax.ShapeDtypeStruct((2, 3), jnp.float32),), path)
+    model = onnx.load(path)
+    expected = onnx.helper.find_min_ir_version_for([onnx.helper.make_opsetid("", 18)])
+    assert model.ir_version == expected
+    _session(path)
+
+
+def test_generic_export_dynamic_batch_constants_need_no_shape_ops(tmp_path: Path) -> None:
+    weight = jnp.arange(12, dtype=jnp.float32).reshape(3, 4) / 7.0
+
+    def model(inputs: jax.Array) -> jax.Array:
+        n = inputs.shape[0]
+        ones = jnp.ones((n, 1), jnp.float32)
+        zeros = jnp.zeros((n, 2), jnp.float32)
+        empty = jnp.zeros((n, 0), jnp.float32)
+        features = jnp.concatenate([ones, inputs[:, :2], empty, zeros], axis=1)
+        repeated = jnp.repeat(inputs, 2, axis=1).reshape(n, 2, 3).sum(axis=1)
+        return jnp.concatenate([features, repeated @ weight], axis=1)
+
+    path = tmp_path / "no_shape_ops.onnx"
+    export_jax_to_onnx(model, (jax.ShapeDtypeStruct((5, 3), jnp.float32),), path)
+    ops = {node.op_type for node in onnx.load(path).graph.node}
+    assert not ops & {"Shape", "ConstantOfShape"}, ops
+    session = _session(path)
+    for batch in (1, 5, 8):
+        x = np.array(jax.random.normal(jax.random.PRNGKey(batch), (batch, 3)), np.float32)
+        x[0, 0] = np.nan if batch == 8 else x[0, 0]
+        (actual,) = session.run(None, {session.get_inputs()[0].name: x})
+        np.testing.assert_allclose(actual, np.asarray(model(jnp.asarray(x))), rtol=1e-6, atol=1e-6, equal_nan=True)
