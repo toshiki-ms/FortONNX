@@ -164,6 +164,85 @@ def is_external_location(location: str) -> bool:
     return bool(parsed.scheme and parsed.scheme != "file")
 
 
+VERIFICATION_DTYPES = {"float32": np.dtype("float32"),
+                       "float64": np.dtype("float64"), "bool": np.dtype("bool")}
+CONTRACT_DTYPES = {"tensor(float)": "float32", "tensor(double)": "float64",
+                   "tensor(bool)": "bool"}
+
+
+def verification_dtype(case: dict[str, Any], contract: dict[str, Any], direction: str) -> np.dtype:
+    """Check the recorded case dtype for every tensor; never silently downcast."""
+    record = case["dtype"]
+    if isinstance(record, dict):
+        try:
+            name = record[direction][contract["onnx_name"]]
+        except (KeyError, TypeError) as error:
+            raise CheckFailure(f"missing verification dtype: {contract['onnx_name']}") from error
+    else:
+        name = record  # Legacy homogeneous cases.
+    if not isinstance(name, str) or name not in VERIFICATION_DTYPES:
+        raise CheckNotRun(f"no installed verification decoder for dtype {name!r}")
+    if CONTRACT_DTYPES.get(contract["element_type"]) != name:
+        raise CheckFailure(f"verification dtype differs from tensor contract: {contract['onnx_name']}")
+    return VERIFICATION_DTYPES[name]
+
+
+def legacy_csv_input_columns(locator: dict[str, Any], input_count: int) -> list[int]:
+    columns = locator.get("columns")
+    if not isinstance(columns, list) or len(columns) != input_count:
+        raise CheckFailure("legacy CSV input locator must have exactly one column per input")
+    return columns
+
+
+def decode_csv_tensor(rows: list[list[str]], locator: dict[str, Any], dtype: np.dtype,
+                      default_shape: list[int]) -> np.ndarray:
+    if not isinstance(locator, dict):
+        raise CheckFailure("CSV tensor locator must be an object")
+    columns = locator.get("columns", [locator.get("column")])
+    if not columns or any(not isinstance(c, int) or isinstance(c, bool) or c < 0 for c in columns):
+        raise CheckFailure("CSV tensor columns must be nonnegative integer indices")
+    selected = locator.get("rows", [])
+    if not selected or any(not isinstance(r, int) or isinstance(r, bool) or r < 1 for r in selected):
+        raise CheckFailure("CSV tensor rows must be positive integer indices")
+    values = []
+    try:
+        for row in selected:
+            for column in columns:
+                text = rows[row - 1][column].strip()
+                if dtype == np.dtype("bool"):
+                    if text.lower() not in {"true", "false", "0", "1"}:
+                        raise CheckFailure(f"invalid CSV bool token: {text!r}")
+                    values.append(text.lower() in {"true", "1"})
+                else:
+                    values.append(float(text))
+        shape = locator.get("shape", default_shape)
+        if not shape or any(not isinstance(d, int) or isinstance(d, bool) or d <= 0 for d in shape):
+            raise CheckFailure("CSV tensor shape must have positive integer dimensions")
+        array = np.asarray(values, dtype=dtype).reshape(shape)
+    except (IndexError, TypeError, ValueError, OverflowError) as error:
+        raise CheckFailure(f"invalid CSV tensor locator/value: {error}") from error
+    if not np.all(np.isfinite(array)):
+        raise CheckFailure("non-finite verification tensor")
+    return array
+
+
+def comparison_error(observed: np.ndarray, expected: np.ndarray,
+                     comparison: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    if observed.dtype != expected.dtype or observed.shape != expected.shape:
+        raise CheckFailure("observed verification tensor dtype/shape mismatch")
+    if not np.all(np.isfinite(observed)):
+        raise CheckFailure("non-finite observed verification tensor")
+    if expected.dtype == np.dtype("bool"):
+        return (observed != expected).astype(np.float64), np.zeros(expected.shape)
+    absolute = np.abs(observed - expected)
+    atol = float(comparison["absolute_tolerance"])
+    rtol = float(comparison["relative_tolerance"])
+    if not math.isfinite(atol) or not math.isfinite(rtol) or atol < 0 or rtol < 0:
+        raise CheckFailure("verification tolerances must be finite and nonnegative")
+    tolerance = atol + rtol * np.abs(expected)
+    return absolute, tolerance
+
+
 def onnx_element_type_name(element_type: int) -> str:
     return f"tensor({TensorProto.DataType.Name(element_type).lower()})"
 
@@ -1504,31 +1583,36 @@ class Validator:
 
         def locators() -> str:
             for case in cases:
-                if case["dtype"] != "float32":
-                    raise CheckNotRun(
-                        f"no installed verification decoder for dtype {case['dtype']!r}"
-                    )
-                artifact = self.artifacts[case["input_artifact"]]
-                if artifact["format"].get("name") not in {
-                    "CSV",
-                    "Comma-separated values",
-                }:
-                    raise CheckNotRun(
-                        f"no installed verification decoder for {artifact['format'].get('name')!r}"
-                    )
-                require_fields(
-                    case["input_locator"],
-                    ("columns", "rows"),
-                    f"input locator {case['id']}",
-                )
-                require_fields(
-                    case["expected_output_locator"],
-                    ("column", "rows"),
-                    f"output locator {case['id']}",
-                )
+                model = self.models[case["model"]]
+                for direction, locator_key, artifact_key in (
+                    ("inputs", "input_locator", "input_artifact"),
+                    ("outputs", "expected_output_locator", "expected_output_artifact"),
+                ):
+                    artifact = self.artifacts[case[artifact_key]]
+                    if artifact["format"].get("name") not in {"CSV", "Comma-separated values"}:
+                        raise CheckNotRun(f"no installed verification decoder for {artifact['format'].get('name')!r}")
+                    locator = case[locator_key]
+                    for tensor_id in model[direction]:
+                        contract = self.tensors[tensor_id]
+                        verification_dtype(case, contract, direction)
+                        if "tensors" in locator:
+                            if contract["onnx_name"] not in locator["tensors"]:
+                                raise CheckFailure(f"missing CSV locator: {contract['onnx_name']}")
+                            tensor_locator = locator["tensors"][contract["onnx_name"]]
+                            label = f"CSV tensor locator {contract['onnx_name']}"
+                            require_fields(tensor_locator, ("rows",), label)
+                            column_field = "columns" if "columns" in tensor_locator else "column"
+                            require_fields(tensor_locator, (column_field,), label)
+                        else:
+                            fields = ("columns", "rows") if direction == "inputs" else ("column", "rows")
+                            require_fields(locator, fields, f"locator {case['id']}")
+                            if direction == "inputs":
+                                legacy_csv_input_columns(locator, len(model[direction]))
+                            if direction == "outputs" and len(model[direction]) != 1:
+                                raise CheckFailure("multiple outputs require per-tensor CSV locators")
                 if len(case["shape"]) != len(case["axes"]):
                     raise CheckFailure(f"case shape/axes mismatch: {case['id']}")
-            return "CSV v1 locators, float32 dtype, shapes, axes, units, and value spaces are decodable"
+            return "CSV v1 locators, per-tensor float32/float64/bool dtypes, shapes, axes, units, and value spaces are decodable"
 
         self.check(
             "VER-002",
@@ -1578,7 +1662,7 @@ class Validator:
         self.finding(
             "VER-004",
             "pass",
-            "Every output was compared with its declared absolute and relative tolerances.",
+            "Every numeric output used declared tolerances; boolean outputs used exact equality.",
         )
         self.finding(
             "VER-005",
@@ -1605,16 +1689,17 @@ class Validator:
             self.finding(
                 "VER-007",
                 "pass",
-                "A same-shaped input swap was rejected by the declared comparison.",
+                "A dtype- and shape-preserving input mapping control was rejected by the declared comparison.",
                 observations=(
-                    {"minimum_detected_error": execution["negative_control_error"]},
+                    {"minimum_detected_error": execution["negative_control_error"],
+                     "non_finite_output_detected": execution["negative_control_nonfinite_detected"]},
                 ),
             )
         else:
             self.finding(
                 "VER-007",
                 "fail",
-                "The mapping-sensitive input-swap control was not detected.",
+                "The dtype- and shape-preserving input mapping control was not detected.",
             )
 
     def execute_cases(self) -> dict[str, Any] | None:
@@ -1631,100 +1716,116 @@ class Validator:
                     )
             negative_error = 0.0
             negative_detected = False
+            negative_nonfinite_detected = False
             for case in self.desc["verification_cases"]:
                 model_decl = self.models[case["model"]]
                 model = self.onnx_models[case["model"]]
                 evaluator = ReferenceEvaluator(model)
-                artifact = self.artifacts[case["input_artifact"]]
-                table_path = self.package_path(artifact["location"])
-                with table_path.open(newline="", encoding="utf-8") as stream:
-                    rows = list(csv.reader(stream))
-                data_rows = rows[1:]
-                input_rows = [
-                    data_rows[index - 1] for index in case["input_locator"]["rows"]
-                ]
-                output_rows = [
-                    data_rows[index - 1]
-                    for index in case["expected_output_locator"]["rows"]
-                ]
-                arrays = []
-                for column in case["input_locator"]["columns"]:
-                    array = np.asarray(
-                        [[float(row[column])] for row in input_rows], dtype=np.float32
-                    )
-                    if not np.all(np.isfinite(array)):
-                        raise CheckFailure(
-                            f"non-finite verification input: {case['id']}"
-                        )
-                    arrays.append(array)
-                expected = np.asarray(
-                    [
-                        [float(row[case["expected_output_locator"]["column"]])]
-                        for row in output_rows
-                    ],
-                    dtype=np.float32,
-                )
                 input_contracts = [self.tensors[item] for item in model_decl["inputs"]]
-                feeds = {
-                    contract["onnx_name"]: array
-                    for contract, array in zip(input_contracts, arrays, strict=True)
-                }
-                output_names = [
-                    self.tensors[item]["onnx_name"] for item in model_decl["outputs"]
-                ]
+                output_contracts = [self.tensors[item] for item in model_decl["outputs"]]
+                # Bind symbols within a case, including expected outputs. A later
+                # dynamic-shape case may realize the same symbol differently.
+                symbolic_sizes: dict[str, int] = {}
+
+                def decode(direction: str, contracts: list[dict[str, Any]]) -> list[np.ndarray]:
+                    is_input = direction == "inputs"
+                    artifact_key = "input_artifact" if is_input else "expected_output_artifact"
+                    locator_key = "input_locator" if is_input else "expected_output_locator"
+                    artifact = self.artifacts[case[artifact_key]]
+                    if artifact["format"].get("name") not in {"CSV", "Comma-separated values"}:
+                        raise CheckNotRun("verification requires the installed CSV decoder")
+                    with self.package_path(artifact["location"]).open(newline="", encoding="utf-8") as stream:
+                        rows = list(csv.reader(stream))[1:]
+                    locator = case[locator_key]
+                    arrays = []
+                    for position, contract in enumerate(contracts):
+                        dtype = verification_dtype(case, contract, direction)
+                        if "tensors" in locator:
+                            tensor_locator = locator["tensors"][contract["onnx_name"]]
+                        elif is_input:
+                            columns = legacy_csv_input_columns(locator, len(contracts))
+                            tensor_locator = {"column": columns[position], "rows": locator["rows"]}
+                        else:
+                            if len(contracts) != 1:
+                                raise CheckFailure("multiple outputs require per-tensor CSV locators")
+                            tensor_locator = locator
+                        array = decode_csv_tensor(rows, tensor_locator, dtype, case["shape"])
+                        if "rank" in contract and array.ndim != contract["rank"]:
+                            raise CheckFailure(f"CSV rank differs from tensor contract: {contract['onnx_name']}")
+                        for declared, actual in zip(contract.get("shape", array.shape), array.shape, strict=True):
+                            if isinstance(declared, int) and declared != actual:
+                                raise CheckFailure(f"CSV shape differs from tensor contract: {contract['onnx_name']}")
+                            if isinstance(declared, str):
+                                if declared in symbolic_sizes and symbolic_sizes[declared] != actual:
+                                    raise CheckFailure(
+                                        f"CSV symbolic dimension {declared!r} has inconsistent sizes: "
+                                        f"{symbolic_sizes[declared]} and {actual} for {contract['onnx_name']}"
+                                    )
+                                symbolic_sizes[declared] = actual
+                        arrays.append(array)
+                    return arrays
+
+                arrays = decode("inputs", input_contracts)
+                expected_values = decode("outputs", output_contracts)
+                feeds = {contract["onnx_name"]: array
+                         for contract, array in zip(input_contracts, arrays, strict=True)}
+                output_names = [contract["onnx_name"] for contract in output_contracts]
                 observed_values = evaluator.run(output_names, feeds)
-                if len(observed_values) != 1:
-                    raise CheckNotRun(
-                        "the installed CSV decoder supports one output per case"
-                    )
-                observed = np.asarray(observed_values[0])
-                if observed.shape != expected.shape or not np.all(
-                    np.isfinite(observed)
-                ):
-                    raise CheckFailure(f"invalid observed output: {case['id']}")
-                absolute = np.abs(observed - expected)
-                tolerance = float(case["comparison"]["absolute_tolerance"]) + float(
-                    case["comparison"]["relative_tolerance"]
-                ) * np.abs(expected)
-                passed = bool(np.all(absolute <= tolerance))
-                maximum = float(np.max(absolute))
-                self.verification_results.append(
-                    {
-                        "id": case["id"],
+                output_results = []
+                all_passed = True
+                for output_name, observed, expected in zip(output_names, observed_values, expected_values, strict=True):
+                    absolute, tolerance = comparison_error(np.asarray(observed), expected, case["comparison"])
+                    passed = bool(np.all(absolute <= tolerance))
+                    all_passed = all_passed and passed
+                    output_results.append({
+                        "onnx_name": output_name,
+                        "dtype": str(expected.dtype),
+                        "comparison": "exact" if expected.dtype == np.dtype("bool") else "absolute and relative tolerance",
+                        "maximum_absolute_error": float(np.max(absolute)),
+                        "absolute_tolerance": 0 if expected.dtype == np.dtype("bool") else case["comparison"]["absolute_tolerance"],
+                        "relative_tolerance": 0 if expected.dtype == np.dtype("bool") else case["comparison"]["relative_tolerance"],
+                        "units": case["units"]["output"],
                         "status": "pass" if passed else "fail",
-                        "outputs": [
-                            {
-                                "onnx_name": output_names[0],
-                                "maximum_absolute_error": maximum,
-                                "absolute_tolerance": case["comparison"][
-                                    "absolute_tolerance"
-                                ],
-                                "relative_tolerance": case["comparison"][
-                                    "relative_tolerance"
-                                ],
-                                "units": case["units"]["output"],
-                                "status": "pass" if passed else "fail",
-                            }
-                        ],
-                    }
-                )
-                if not passed:
+                    })
+                self.verification_results.append({
+                    "id": case["id"], "status": "pass" if all_passed else "fail", "outputs": output_results,
+                })
+                if not all_passed:
                     raise CheckFailure(f"known-answer comparison failed: {case['id']}")
-                if (
-                    not negative_detected
-                    and len(arrays) >= 2
-                    and arrays[0].shape == arrays[1].shape
-                ):
-                    swapped = dict(feeds)
-                    swapped[input_contracts[0]["onnx_name"]] = arrays[1]
-                    swapped[input_contracts[1]["onnx_name"]] = arrays[0]
-                    perturbed = np.asarray(evaluator.run(output_names, swapped)[0])
-                    error = np.abs(perturbed - expected)
-                    negative_error = float(np.min(error))
-                    negative_detected = bool(np.any(error > tolerance))
+                if not negative_detected:
+                    controls = []
+                    if (len(arrays) >= 2 and arrays[0].shape == arrays[1].shape
+                            and arrays[0].dtype == arrays[1].dtype):
+                        swapped = dict(feeds)
+                        swapped[input_contracts[0]["onnx_name"]] = arrays[1]
+                        swapped[input_contracts[1]["onnx_name"]] = arrays[0]
+                        controls.append(swapped)
+                    else:
+                        # A mixed-dtype signature must not swap float and bool buffers.
+                        # Permute values within each tensor, preserving dtype and shape.
+                        for contract, array in zip(input_contracts, arrays, strict=True):
+                            for axis in range(array.ndim):
+                                if array.shape[axis] > 1:
+                                    changed = dict(feeds)
+                                    changed[contract["onnx_name"]] = np.flip(array, axis=axis).copy()
+                                    controls.append(changed)
+                    for changed in controls:
+                        perturbed_values = evaluator.run(output_names, changed)
+                        for perturbed, expected in zip(perturbed_values, expected_values, strict=True):
+                            perturbed = np.asarray(perturbed)
+                            if not np.all(np.isfinite(perturbed)):
+                                # Nominal outputs already passed the strict finite
+                                # check; a non-finite control is a detected mismatch.
+                                negative_detected = True
+                                negative_nonfinite_detected = True
+                                continue
+                            error, tolerance = comparison_error(perturbed, expected, case["comparison"])
+                            negative_error = max(negative_error, float(np.min(error)))
+                            negative_detected = negative_detected or bool(np.any(error > tolerance))
             return {
                 "negative_control_detected": negative_detected,
-                "negative_control_error": negative_error,
+                "negative_control_error": None if negative_nonfinite_detected else negative_error,
+                "negative_control_nonfinite_detected": negative_nonfinite_detected,
             }
 
         return self.check(

@@ -1380,7 +1380,10 @@ def validate_generated_package(
             if tensor["onnx_name"] == value.name
         )
         tensor_type = value.type.tensor_type
-        if tensor_type.elem_type != TensorProto.FLOAT:
+        declared_element_type = {"tensor(float)": TensorProto.FLOAT,
+                                 "tensor(double)": TensorProto.DOUBLE,
+                                 "tensor(bool)": TensorProto.BOOL}.get(contract["element_type"])
+        if declared_element_type is None or tensor_type.elem_type != declared_element_type:
             raise RuntimeError(f"unexpected ONNX element type: {value.name}")
         if len(tensor_type.shape.dim) != contract["rank"]:
             raise RuntimeError(f"unexpected ONNX rank: {value.name}")

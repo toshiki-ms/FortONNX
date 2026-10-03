@@ -14,6 +14,29 @@ enum {
   FORTONNX_BACKEND_TENSORRT = 2
 };
 
+/* Values match ONNXTensorElementDataType. Bool buffers contain one byte per element. */
+enum {
+  FORTONNX_FLOAT32 = 1,
+  FORTONNX_BOOL = 9,
+  FORTONNX_FLOAT64 = 11
+};
+
+int fortonnx_session_get_tensor_type_at(
+    void* session, int is_input, int64_t index, int* element_type);
+/* Typed entry points check the caller type against the model, without casting.
+   The original bind entry points remain float32-only for compatibility. */
+int fortonnx_session_bind_input_typed(
+    void* session, int64_t index, void* data, int memory_backend,
+    const int64_t* shape, int64_t rank, int element_type);
+int fortonnx_session_bind_output_typed(
+    void* session, int64_t index, void* data, int memory_backend,
+    const int64_t* shape, int64_t rank, int element_type);
+int fortonnx_session_bind_tensor_typed(
+    void* session, void* input, void* output, int memory_backend,
+    const int64_t* input_shape, int64_t input_rank,
+    const int64_t* output_shape, int64_t output_rank,
+    int input_type, int output_type);
+
 void* fortonnx_cpu_context_create(int intra_op_threads, int inter_op_threads);
 void fortonnx_cpu_context_destroy(void* context);
 

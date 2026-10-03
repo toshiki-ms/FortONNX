@@ -1040,3 +1040,29 @@ def test_generic_export_dynamic_batch_constants_need_no_shape_ops(tmp_path: Path
         x[0, 0] = np.nan if batch == 8 else x[0, 0]
         (actual,) = session.run(None, {session.get_inputs()[0].name: x})
         np.testing.assert_allclose(actual, np.asarray(model(jnp.asarray(x))), rtol=1e-6, atol=1e-6, equal_nan=True)
+
+
+def test_export_preserves_fp64_and_bool_mixed_io(tmp_path: Path) -> None:
+    with jax.enable_x64():
+        def model(state, enabled):
+            return (jnp.where(enabled, state + np.float64(2**-42), state),
+                    jnp.logical_and(enabled, state > 0))
+
+        path = tmp_path / "fp64_bool.onnx"
+        export_jax_to_onnx(model, (
+            jax.ShapeDtypeStruct((3, 2), jnp.float64),
+            jax.ShapeDtypeStruct((3, 2), jnp.bool_),
+        ), path, input_names=("state", "enabled"), output_names=("values", "valid"))
+        graph = onnx.load(path)
+        assert [value.type.tensor_type.elem_type for value in graph.graph.input] == [onnx.TensorProto.DOUBLE, onnx.TensorProto.BOOL]
+        assert [value.type.tensor_type.elem_type for value in graph.graph.output] == [onnx.TensorProto.DOUBLE, onnx.TensorProto.BOOL]
+        assert not any(tensor.data_type == onnx.TensorProto.FLOAT for tensor in graph.graph.initializer)
+        session = _session(path)
+        for batch in (1, 3, 5):
+            state = np.full((batch, 2), 1 + 2**-40, dtype=np.float64)
+            enabled = np.ones((batch, 2), dtype=np.bool_)
+            actual = session.run(None, {"state": state, "enabled": enabled})
+            assert actual[0].dtype == np.float64
+            assert actual[1].dtype == np.bool_
+            np.testing.assert_array_equal(actual[0], state + 2**-42)
+            np.testing.assert_array_equal(actual[1], enabled)

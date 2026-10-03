@@ -9,6 +9,7 @@ typedef struct {
   char* name;
   int64_t* shape;
   size_t rank;
+  ONNXTensorElementDataType element_type;
 } FortonnxTensor;
 
 typedef struct {

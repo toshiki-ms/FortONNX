@@ -2,6 +2,15 @@
 
 ## 0.1.0 - unreleased
 
+- Add zero-copy float64 and one-byte bool tensors on CPU and CUDA, with
+  type-checked C entry points and Fortran array/view generics.
+- Preserve existing float32 APIs and add model tensor element-type inspection.
+- Route FP64 TensorRT requests through CUDA without precision reduction.
+- Decode scientific-package CSV cases using per-tensor float32/float64/bool
+  dtypes, including mixed multiple outputs and exact boolean comparisons.
+- Add FP64/bool CPU/CUDA and JAX/validator regression tests; add
+  `test-gpu-build` for compiling GPU tests without running them.
+
 - Add portable Fortran runtime with named multi-model management.
 - Add shared CPU thread-pool configuration.
 - Add CUDA and TensorRT execution-provider configuration.

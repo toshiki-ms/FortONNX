@@ -24,8 +24,15 @@ the stream.
 ## TensorRT
 
 `fortonnx_tensorrt` registers TensorRT and then CUDA. TensorRT executes the
-supported partitions and CUDA handles remaining nodes. The cache directory is
-required when engine caching is enabled. Engine and timing cache files are
+supported partitions and CUDA handles remaining nodes. FP64 graphs bypass
+TensorRT entirely and use CUDA, because TensorRT's ONNX parser can cast DOUBLE
+weights to FLOAT (see the [NVIDIA parser documentation](https://docs.nvidia.com/deeplearning/tensorrt/latest/_static/c-api/_nv_onnx_parser_8h_source.html)).
+FortONNX inspects tensor types, constants, nested graphs and function bodies
+before registering TensorRT; failed inspection conservatively selects CUDA.
+This affects provider selection, not the declared tensor types or data.
+The device-pointer path disables CPU execution-provider fallback; unavailable
+FP64/bool CUDA kernels return an error, never a precision-reducing conversion.
+The cache directory is required when engine caching is enabled. Engine and timing cache files are
 runtime artifacts and must not be committed.
 
 The compiled ONNX Runtime library determines whether CUDA and TensorRT are

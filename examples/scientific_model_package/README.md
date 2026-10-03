@@ -106,3 +106,44 @@ python3 examples/scientific_model_package/build_package.py OUTPUT_DIRECTORY
 
 The destination must not already exist. This prevents an existing package or
 unrelated files from being overwritten.
+
+## FP64 and boolean verification tensors
+
+The linear example remains float32. The validator also supports CSV-decoded
+float64 and bool inputs/outputs, including multiple mixed-type outputs. Every
+model tensor records its ONNX `element_type` (`tensor(float)`, `tensor(double)`
+or `tensor(bool)`). Numeric CSV values are decoded directly into the declared
+NumPy dtype; boolean tokens must be `true`, `false`, `1`, or `0` (case-insensitive).
+Boolean outputs always use exact equality, regardless of numeric tolerances.
+
+Existing homogeneous cases may retain `"dtype": "float32"` (or `"float64"` /
+`"bool"`). Mixed cases record dtype by ONNX name, for example:
+
+```json
+"dtype": {
+  "inputs": {"state": "float64", "enabled": "bool"},
+  "outputs": {"values": "float64", "valid": "bool"}
+}
+```
+
+For heterogeneous shapes, multi-column inputs or multiple outputs, both
+`input_locator` and `expected_output_locator` accept named tensor locators:
+
+```json
+"input_locator": {"tensors": {
+  "state": {"rows": [1, 2, 3], "columns": [0, 1], "shape": [3, 2]},
+  "enabled": {"rows": [1, 2, 3], "columns": [2, 3], "shape": [3, 2]}
+}},
+"expected_output_locator": {"tensors": {
+  "values": {"rows": [1, 2, 3], "columns": [4, 5], "shape": [3, 2]},
+  "valid": {"rows": [1, 2, 3], "columns": [6, 7], "shape": [3, 2]}
+}}
+```
+
+Rows are one-based after the header; columns are zero-based. `column` is the
+single-column shorthand; `shape` defaults to the case's `shape`. Values are
+flattened in row-major ONNX order. Expected values come from
+`expected_output_artifact`, independently of the input CSV. Missing or
+mismatched dtype records are rejected. Mapping-sensitive negative controls
+swap compatible inputs, or permute values within individual mixed-type inputs;
+they never swap or cast buffers of different dtypes.
