@@ -18,14 +18,29 @@ module fortonnx_c_api
   public :: c_fortonnx_session_find_tensor
   public :: c_fortonnx_session_begin_bind
   public :: c_fortonnx_session_bind_input
+  public :: c_fortonnx_session_bind_input_typed
   public :: c_fortonnx_session_bind_output
+  public :: c_fortonnx_session_bind_output_typed
   public :: c_fortonnx_session_bind
   public :: c_fortonnx_session_bind_tensor
+  public :: c_fortonnx_session_bind_tensor_typed
   public :: c_fortonnx_session_run
   public :: c_fortonnx_session_destroy
   public :: c_fortonnx_last_error
 
+  public :: c_fortonnx_session_get_tensor_type_at
+
   interface
+    function c_fortonnx_session_get_tensor_type_at(session, is_input, index, element_type) &
+        bind(C, name='fortonnx_session_get_tensor_type_at') result(code)
+      import :: c_int, c_int64_t, c_ptr
+      type(c_ptr), value :: session
+      integer(c_int), value :: is_input
+      integer(c_int64_t), value :: index
+      integer(c_int), intent(out) :: element_type
+      integer(c_int) :: code
+    end function c_fortonnx_session_get_tensor_type_at
+
     function c_fortonnx_cpu_context_create(intra_threads, inter_threads) &
         bind(C, name='fortonnx_cpu_context_create') result(context)
       import :: c_int, c_ptr
@@ -167,6 +182,17 @@ module fortonnx_c_api
       integer(c_int) :: code
     end function c_fortonnx_session_bind_input
 
+    function c_fortonnx_session_bind_input_typed(session, index, data, memory_backend, &
+        shape, rank, element_type) bind(C, name='fortonnx_session_bind_input_typed') result(code)
+      import :: c_int, c_int64_t, c_ptr
+      type(c_ptr), value :: session, data
+      integer(c_int64_t), value :: index
+      integer(c_int), value :: memory_backend, element_type
+      integer(c_int64_t), intent(in) :: shape(*)
+      integer(c_int64_t), value :: rank
+      integer(c_int) :: code
+    end function c_fortonnx_session_bind_input_typed
+
     function c_fortonnx_session_bind_output(session, index, data, memory_backend, &
         shape, rank) bind(C, name='fortonnx_session_bind_output') result(code)
       import :: c_int, c_int64_t, c_ptr
@@ -177,6 +203,17 @@ module fortonnx_c_api
       integer(c_int64_t), value :: rank
       integer(c_int) :: code
     end function c_fortonnx_session_bind_output
+
+    function c_fortonnx_session_bind_output_typed(session, index, data, memory_backend, &
+        shape, rank, element_type) bind(C, name='fortonnx_session_bind_output_typed') result(code)
+      import :: c_int, c_int64_t, c_ptr
+      type(c_ptr), value :: session, data
+      integer(c_int64_t), value :: index
+      integer(c_int), value :: memory_backend, element_type
+      integer(c_int64_t), intent(in) :: shape(*)
+      integer(c_int64_t), value :: rank
+      integer(c_int) :: code
+    end function c_fortonnx_session_bind_output_typed
 
     function c_fortonnx_session_bind(session, input, output, memory_backend, &
         batch_size, input_features, output_features) &
@@ -198,6 +235,17 @@ module fortonnx_c_api
       integer(c_int64_t), value :: input_rank, output_rank
       integer(c_int) :: code
     end function c_fortonnx_session_bind_tensor
+
+    function c_fortonnx_session_bind_tensor_typed(session, input, output, &
+        memory_backend, input_shape, input_rank, output_shape, output_rank, input_type, output_type) &
+        bind(C, name='fortonnx_session_bind_tensor_typed') result(code)
+      import :: c_int, c_int64_t, c_ptr
+      type(c_ptr), value :: session, input, output
+      integer(c_int), value :: memory_backend, input_type, output_type
+      integer(c_int64_t), intent(in) :: input_shape(*), output_shape(*)
+      integer(c_int64_t), value :: input_rank, output_rank
+      integer(c_int) :: code
+    end function c_fortonnx_session_bind_tensor_typed
 
     function c_fortonnx_session_run(session) &
         bind(C, name='fortonnx_session_run') result(code)

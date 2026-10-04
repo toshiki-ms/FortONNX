@@ -1,6 +1,7 @@
 #include "fortonnx_ort_internal.h"
 
 #include <stdio.h>
+#include "fortonnx_onnx_precision.h"
 
 void* fortonnx_session_create_gpu(
     const char* model_path,
@@ -58,7 +59,8 @@ void* fortonnx_session_create_gpu_with_custom_ops(
                        session->session_options,
                        "session.disable_cpu_ep_fallback", "1"))) goto fail;
 
-  if (backend == FORTONNX_BACKEND_TENSORRT) {
+  /* Preserve FP64: TensorRT is bypassed, CUDA remains the device provider. */
+  if (backend == FORTONNX_BACKEND_TENSORRT && !fortonnx_model_needs_fp64(model_path)) {
     char trt_device_text[32];
     const char* trt_fp16_text = tensorrt_fp16 != 0 ? "true" : "false";
     const char* trt_cache_text = tensorrt_engine_cache != 0 ? "true" : "false";

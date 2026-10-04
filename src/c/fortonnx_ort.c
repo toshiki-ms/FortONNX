@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+_Static_assert(sizeof(float) == 4 && sizeof(double) == 8, "ONNX requires 4-byte float and 8-byte double");
+
 typedef struct {
   const OrtApi* api;
   OrtEnv* env;
@@ -85,7 +87,7 @@ static int copy_io_name(
 
 static int query_tensor_shape(
     FortonnxSession* session, int input, size_t index,
-    int64_t** shape, size_t* shape_rank) {
+    int64_t** shape, size_t* shape_rank, ONNXTensorElementDataType* declared_type) {
   OrtTypeInfo* type_info = NULL;
   const OrtTensorTypeAndShapeInfo* tensor_info = NULL;
   ONNXTensorElementDataType element_type;
@@ -105,8 +107,10 @@ static int query_tensor_shape(
   }
   if (fortonnx_store_status(
           session, session->api->GetTensorElementType(tensor_info, &element_type))) goto fail;
-  if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-    fortonnx_store_message(session, "FortONNX currently supports float32 tensors only");
+  if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+      element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE &&
+      element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) {
+    fortonnx_store_message(session, "FortONNX supports float32, float64 and bool tensors only");
     goto fail;
   }
   if (fortonnx_store_status(
@@ -126,6 +130,7 @@ static int query_tensor_shape(
   }
   if (fortonnx_store_status(
           session, session->api->GetDimensions(tensor_info, dimensions, rank))) goto fail;
+  *declared_type = element_type;
   *shape = dimensions;
   *shape_rank = rank;
   session->api->ReleaseTypeInfo(type_info);
@@ -218,13 +223,13 @@ int fortonnx_finish_session(FortonnxSession* session, const char* model_path,
     if (copy_io_name(session, 1, index, &session->inputs[index].name)) return 1;
     if (query_tensor_shape(
             session, 1, index, &session->inputs[index].shape,
-            &session->inputs[index].rank)) return 1;
+            &session->inputs[index].rank, &session->inputs[index].element_type)) return 1;
   }
   for (index = 0; index < session->output_count; ++index) {
     if (copy_io_name(session, 0, index, &session->outputs[index].name)) return 1;
     if (query_tensor_shape(
             session, 0, index, &session->outputs[index].shape,
-            &session->outputs[index].rank)) return 1;
+            &session->outputs[index].rank, &session->outputs[index].element_type)) return 1;
   }
   if (memory_name == NULL) {
     if (fortonnx_store_status(
@@ -369,6 +374,26 @@ static FortonnxTensor* tensor_at(
   return is_input ? &session->inputs[index] : &session->outputs[index];
 }
 
+int fortonnx_session_get_tensor_type_at(
+    void* opaque, int is_input, int64_t index, int* element_type) {
+  FortonnxSession* session = (FortonnxSession*)opaque;
+  FortonnxTensor* tensor = tensor_at(session, is_input, index);
+  if (tensor == NULL || element_type == NULL) {
+    return fortonnx_store_message(session, "invalid tensor index or type destination");
+  }
+  *element_type = (int)tensor->element_type;
+  return 0;
+}
+
+static const char* tensor_type_name(int element_type) {
+  switch (element_type) {
+    case FORTONNX_FLOAT32: return "float32";
+    case FORTONNX_FLOAT64: return "float64";
+    case FORTONNX_BOOL: return "bool";
+    default: return "unsupported";
+  }
+}
+
 int fortonnx_session_get_tensor_rank_at(
     void* opaque, int is_input, int64_t index, int64_t* rank) {
   FortonnxSession* session = (FortonnxSession*)opaque;
@@ -437,20 +462,32 @@ static int shape_matches(
 }
 
 static int tensor_bytes(
-    FortonnxSession* session, const int64_t* shape, size_t rank, size_t* bytes) {
+    FortonnxSession* session, const int64_t* shape, size_t rank,
+    ONNXTensorElementDataType element_type, size_t* bytes) {
   size_t count = 1;
   size_t axis;
+  size_t element_bytes;
+  switch (element_type) {
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT: element_bytes = sizeof(float); break;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE: element_bytes = sizeof(double); break;
+    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL: element_bytes = 1; break;
+    default: return fortonnx_store_message(session, "unsupported tensor element type");
+  }
   for (axis = 0; axis < rank; ++axis) {
-    size_t dimension = (size_t)shape[axis];
+    size_t dimension;
+    if ((uint64_t)shape[axis] > SIZE_MAX) {
+      return fortonnx_store_message(session, "tensor dimension overflows size_t");
+    }
+    dimension = (size_t)shape[axis];
     if (dimension > SIZE_MAX / count) {
       return fortonnx_store_message(session, "tensor element count overflows size_t");
     }
     count *= dimension;
   }
-  if (count > SIZE_MAX / sizeof(float)) {
+  if (count > SIZE_MAX / element_bytes) {
     return fortonnx_store_message(session, "tensor byte size overflows size_t");
   }
-  *bytes = count * sizeof(float);
+  *bytes = count * element_bytes;
   return 0;
 }
 
@@ -472,7 +509,8 @@ static int bind_one_tensor(
     void* data,
     int memory_backend,
     const int64_t* shape,
-    int64_t rank) {
+    int64_t rank,
+    int element_type) {
   FortonnxTensor* tensor = tensor_at(session, is_input, index);
   int session_is_cpu;
   int memory_is_cpu;
@@ -480,6 +518,13 @@ static int bind_one_tensor(
 
   if (tensor == NULL || data == NULL || shape == NULL) {
     return fortonnx_store_message(session, "invalid tensor index, buffer pointer, or shape");
+  }
+  if (element_type != (int)tensor->element_type) {
+    char message[2048];
+    snprintf(message, sizeof(message), "%s tensor '%s' element type mismatch: model %s, caller %s",
+             is_input ? "input" : "output", tensor->name,
+             tensor_type_name(tensor->element_type), tensor_type_name(element_type));
+    return fortonnx_store_message(session, message);
   }
   session_is_cpu = session->backend == FORTONNX_BACKEND_CPU;
   memory_is_cpu = memory_backend == FORTONNX_BACKEND_CPU;
@@ -494,11 +539,11 @@ static int bind_one_tensor(
   if (tensor->value != NULL) {
     return fortonnx_store_message(session, "the same model tensor was bound more than once");
   }
-  if (tensor_bytes(session, shape, tensor->rank, &bytes)) return 1;
+  if (tensor_bytes(session, shape, tensor->rank, tensor->element_type, &bytes)) return 1;
   if (fortonnx_store_status(
           session, session->api->CreateTensorWithDataAsOrtValue(
                        session->memory_info, data, bytes, shape, tensor->rank,
-                       ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &tensor->value))) return 1;
+                       tensor->element_type, &tensor->value))) return 1;
   if (is_input) {
     return fortonnx_store_status(
         session, session->api->BindInput(session->binding, tensor->name, tensor->value));
@@ -511,14 +556,45 @@ int fortonnx_session_bind_input(
     void* opaque, int64_t index, void* data, int memory_backend,
     const int64_t* shape, int64_t rank) {
   return bind_one_tensor(
-      (FortonnxSession*)opaque, 1, index, data, memory_backend, shape, rank);
+      (FortonnxSession*)opaque, 1, index, data, memory_backend, shape, rank, FORTONNX_FLOAT32);
 }
 
 int fortonnx_session_bind_output(
     void* opaque, int64_t index, void* data, int memory_backend,
     const int64_t* shape, int64_t rank) {
   return bind_one_tensor(
-      (FortonnxSession*)opaque, 0, index, data, memory_backend, shape, rank);
+      (FortonnxSession*)opaque, 0, index, data, memory_backend, shape, rank, FORTONNX_FLOAT32);
+}
+
+int fortonnx_session_bind_input_typed(
+    void* opaque, int64_t index, void* data, int memory_backend,
+    const int64_t* shape, int64_t rank, int element_type) {
+  return bind_one_tensor(
+      (FortonnxSession*)opaque, 1, index, data, memory_backend, shape, rank, element_type);
+}
+
+int fortonnx_session_bind_output_typed(
+    void* opaque, int64_t index, void* data, int memory_backend,
+    const int64_t* shape, int64_t rank, int element_type) {
+  return bind_one_tensor(
+      (FortonnxSession*)opaque, 0, index, data, memory_backend, shape, rank, element_type);
+}
+
+int fortonnx_session_bind_tensor_typed(
+    void* opaque, void* input, void* output, int memory_backend,
+    const int64_t* input_shape, int64_t input_rank,
+    const int64_t* output_shape, int64_t output_rank,
+    int input_type, int output_type) {
+  FortonnxSession* session = (FortonnxSession*)opaque;
+  if (session == NULL || session->input_count != 1 || session->output_count != 1) {
+    return fortonnx_store_message(
+        session, "the scalar tensor bind overload requires one input and one output");
+  }
+  if (fortonnx_session_begin_bind(opaque)) return 1;
+  if (fortonnx_session_bind_input_typed(
+          opaque, 0, input, memory_backend, input_shape, input_rank, input_type)) return 1;
+  return fortonnx_session_bind_output_typed(
+      opaque, 0, output, memory_backend, output_shape, output_rank, output_type);
 }
 
 int fortonnx_session_bind_tensor(

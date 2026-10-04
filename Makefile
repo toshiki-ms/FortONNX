@@ -118,7 +118,7 @@ ORT_PROVIDER_NAMES := $(foreach provider,$(ORT_PROVIDER_CANDIDATES),$(if $(wildc
 ORT_PROVIDER_LINKS := $(addprefix $(LIB_DIR)/,$(ORT_PROVIDER_NAMES))
 endif
 
-.PHONY: all configure clean distclean release-check install uninstall examples test test-gpu test-python info scientific-package-files scientific-package-example scientific-package-validate
+.PHONY: all configure clean distclean release-check install uninstall examples test test-gpu test-gpu-build test-python info scientific-package-files scientific-package-example scientific-package-validate
 
 all: $(LIB_STATIC) $(LIB_SHARED) $(ORT_RUNTIME_LINK) $(ORT_PROVIDER_LINKS)
 
@@ -143,7 +143,7 @@ $(ORT_PROVIDER_LINKS): $(LIB_DIR)/%: $(ONNXRUNTIME_LIBDIR)/% | $(LIB_DIR)
 $(OBJ_DIR)/fortonnx_ort.o: src/c/fortonnx_ort.c src/c/fortonnx_ort.h src/c/fortonnx_ort_internal.h | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/fortonnx_ort_gpu.o: src/c/fortonnx_ort_gpu.c src/c/fortonnx_ort.h src/c/fortonnx_ort_internal.h | $(OBJ_DIR)
+$(OBJ_DIR)/fortonnx_ort_gpu.o: src/c/fortonnx_ort_gpu.c src/c/fortonnx_ort.h src/c/fortonnx_ort_internal.h src/c/fortonnx_onnx_precision.h | $(OBJ_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/fortonnx_ort_gpu_stub.o: src/c/fortonnx_ort_gpu_stub.c src/c/fortonnx_ort.h | $(OBJ_DIR)
@@ -191,6 +191,15 @@ scientific-package-validate: $(SCIENTIFIC_PACKAGE_DESCRIPTION_DIGEST) $(SCIENTIF
 scientific-package-example: $(SCIENTIFIC_PACKAGE_DESCRIPTION) $(BIN_DIR)/scientific_package_cpu
 	$(BIN_DIR)/scientific_package_cpu $(SCIENTIFIC_PACKAGE_DIR)
 
+$(TEST_DIR)/fp64.onnx: tests/make_fp64_model.py | $(TEST_DIR)
+	$(PYTHON) $< $@
+
+$(BIN_DIR)/test_fp64_cpu: tests/test_fp64_cpu.f90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) | $(BIN_DIR)
+	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
+
+$(BIN_DIR)/test_fp64_c: tests/test_fp64_c.c src/c/fortonnx_onnx_precision.h $(LIB_STATIC) $(ORT_RUNTIME_LINK) | $(BIN_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
+
 $(TEST_DIR)/linear.onnx: tests/make_test_model.py | $(TEST_DIR)
 	$(PYTHON) $< $@
 
@@ -209,11 +218,20 @@ $(BIN_DIR)/test_cnn_cpu: tests/test_cnn_cpu.f90 $(LIB_STATIC) $(ORT_RUNTIME_LINK
 $(BIN_DIR)/test_multi_input_cpu: tests/test_multi_input_cpu.f90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) | $(BIN_DIR)
 	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
 
-test: $(TEST_DIR)/linear.onnx $(TEST_DIR)/cnn.onnx $(TEST_DIR)/multi_input.onnx \
+test: $(TEST_DIR)/fp64.onnx $(BIN_DIR)/test_fp64_cpu $(BIN_DIR)/test_fp64_c \
+		$(TEST_DIR)/linear.onnx $(TEST_DIR)/cnn.onnx $(TEST_DIR)/multi_input.onnx \
 		$(BIN_DIR)/test_cpu $(BIN_DIR)/test_cnn_cpu $(BIN_DIR)/test_multi_input_cpu
+	$(BIN_DIR)/test_fp64_cpu $(TEST_DIR)/fp64.onnx
+	$(BIN_DIR)/test_fp64_c $(TEST_DIR)/fp64.onnx $(TEST_DIR)/linear.onnx
 	$(BIN_DIR)/test_cpu $(TEST_DIR)/linear.onnx
 	$(BIN_DIR)/test_cnn_cpu $(TEST_DIR)/cnn.onnx
 	$(BIN_DIR)/test_multi_input_cpu $(TEST_DIR)/multi_input.onnx
+
+$(BIN_DIR)/test_fp64_cuda: tests/test_fp64_cuda.F90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) $(ORT_PROVIDER_LINKS) | $(BIN_DIR)
+	@if [ "$(FC_NAME)" != nvfortran ] || [ "$(BACKEND)" = cpu ]; then \
+		echo 'test-gpu requires FC=nvfortran and BACKEND=cuda or tensorrt' >&2; exit 2; \
+	fi
+	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
 
 $(BIN_DIR)/test_cuda: tests/test_cuda.F90 $(LIB_STATIC) $(ORT_RUNTIME_LINK) $(ORT_PROVIDER_LINKS) | $(BIN_DIR)
 	@if [ "$(FC_NAME)" != nvfortran ] || [ "$(BACKEND)" = cpu ]; then \
@@ -233,14 +251,18 @@ $(BIN_DIR)/test_multi_input_cuda: tests/test_multi_input_cuda.F90 $(LIB_STATIC) 
 	fi
 	$(FC) $(FFLAGS) $(FMOD_IN)$(MOD_DIR) $< $(LIB_STATIC) $(LDFLAGS) $(LDLIBS) $(RPATH_FLAGS) -o $@
 
-test-gpu: $(TEST_DIR)/linear.onnx $(TEST_DIR)/cnn.onnx $(TEST_DIR)/multi_input.onnx \
-		$(BIN_DIR)/test_cuda $(BIN_DIR)/test_cnn_cuda $(BIN_DIR)/test_multi_input_cuda
+test-gpu-build: $(TEST_DIR)/fp64.onnx $(TEST_DIR)/linear.onnx $(TEST_DIR)/cnn.onnx $(TEST_DIR)/multi_input.onnx \
+		$(BIN_DIR)/test_cuda $(BIN_DIR)/test_cnn_cuda $(BIN_DIR)/test_multi_input_cuda $(BIN_DIR)/test_fp64_cuda
+
+# Build-only is safe on systems without a GPU; test-gpu still executes the tests.
+test-gpu: test-gpu-build
+	$(BIN_DIR)/test_fp64_cuda $(TEST_DIR)/fp64.onnx $(BACKEND)
 	$(BIN_DIR)/test_cuda $(TEST_DIR)/linear.onnx $(BACKEND)
 	$(BIN_DIR)/test_cnn_cuda $(TEST_DIR)/cnn.onnx $(BACKEND)
 	$(BIN_DIR)/test_multi_input_cuda $(TEST_DIR)/multi_input.onnx $(BACKEND)
 
 test-python:
-	PYTHONPATH=python/src $(PYTHON) -m pytest -q tests/test_export.py
+	PYTHONPATH=python/src $(PYTHON) -m pytest -q tests/test_export.py tests/test_scientific_package_example.py tests/test_scientific_package_validator.py tests/test_fp64_package.py
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/fortonnx

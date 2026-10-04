@@ -18,7 +18,8 @@ Version 0.1 supports dense and convolutional scientific surrogates through a
 small tensor interface:
 
 - multiple named tensor inputs and outputs per model;
-- `float32` tensors of any positive rank through pointer-plus-shape binding;
+- `float32`, `float64`, and one-byte `bool` tensors of any positive rank
+  through pointer-plus-shape binding;
 - static and dynamic ONNX dimensions, with concrete positive dimensions at bind time;
 - direct contiguous host arrays, plus CUDA Fortran device arrays of ranks 1 through 7;
 - multiple named models in one `fortonnx_runtime`;
@@ -29,8 +30,9 @@ small tensor interface:
 - asynchronous GPU execution when a caller-owned CUDA stream is supplied.
 
 Unsupported tensor dtypes and non-tensor model arguments are rejected when the
-model is loaded. Additional dtype support is planned after this small API is
-stable.
+model is loaded. Buffers must match the declared ONNX element type; FortONNX
+never casts FP64 buffers to FP32. Default Fortran `logical` arrays are not interchangeable
+with `logical(c_bool)` arrays.
 
 ## Requirements
 
@@ -196,7 +198,8 @@ call runtime%bind('super_resolution', inputs, &
 ```
 
 Names are optional; unnamed views are bound positionally. For multiple outputs,
-pass tensor-view arrays for both the `inputs` and `outputs` arguments. Use
+pass tensor-view arrays for both the `inputs` and `outputs` arguments.
+Views can mix `real(c_float)`, `real(c_double)`, and `logical(c_bool)` arrays. Use
 `runtime%io_counts` and `runtime%tensor_shape` to inspect a multi-I/O signature.
 
 See `examples/multi_model_cpu.f90` for a runtime containing several named
@@ -277,9 +280,21 @@ with `fortonnx_device_tensor(array, name)` and pass it to the same `bind`
 interface used on CPU.
 
 TensorRT is registered first and CUDA remains its fallback for unsupported
-nodes. `use_tf32`, TensorRT FP16, and engine/timing cache settings live in
+nodes. Graphs containing FP64 types/constants bypass TensorRT and use CUDA
+to avoid TensorRT precision reduction; FP64 support depends on CUDA kernels
+for the graph operators. CPU fallback is disabled for device-pointer sessions. `use_tf32`, TensorRT FP16, and engine/timing cache settings live in
 `fortonnx_options`, so model-management code does not change when the backend
 changes.
+
+Build GPU tests without running them (for example on a system without a GPU):
+
+```sh
+make test-gpu-build
+```
+
+Run them only on an allocated GPU node with `make test-gpu`. Both targets
+include the FP64/bool device tests. On Miyabi, submit builds and numerical
+checks through PBS rather than running heavy work on login nodes.
 
 ## JAX export
 

@@ -1,10 +1,61 @@
 # Tensor shapes and layout
 
-FortONNX accepts multiple named float32 input and output tensors per model.
+FortONNX accepts multiple named float32, float64 and bool input and output tensors per model.
 Tensor rank must be positive. Model dimensions may be static or dynamic; every
 dimension supplied when buffers are bound must be positive.
 A static model dimension must equal the bound dimension. ONNX Runtime performs
 the remaining graph-dependent shape validation during inference.
+
+## Element types
+
+| ONNX type | Fortran array type | C buffer element | Bytes | Type tag |
+|---|---|---|---|---|
+| FLOAT (`float32`) | `real(c_float)` | `float` | 4 | `fortonnx_float32` / `FORTONNX_FLOAT32` |
+| DOUBLE (`float64`) | `real(c_double)` | `double` | 8 | `fortonnx_float64` / `FORTONNX_FLOAT64` |
+| BOOL (`bool`) | `logical(c_bool)` | `uint8_t` (0 or 1) | 1 | `fortonnx_bool` / `FORTONNX_BOOL` |
+
+All three types use the same `runtime%bind`, `fortonnx_host_tensor` and
+`fortonnx_device_tensor` generics and the same borrowed-buffer lifetime rules.
+Host assumed-rank overloads have no API rank ceiling (subject to compiler
+array-rank limits); direct CUDA Fortran arrays and device views support ranks 1 through 7. A direct input/output pair
+can have different element types; device pairs must still have the same rank.
+Use independent views for heterogeneous ranks or multiple inputs/outputs.
+
+Array overloads infer the caller's element type. Binding compares it against
+the model tensor and reports the direction, ONNX name, expected type and
+caller type on mismatch (for example `input tensor 'state' element type
+mismatch: model float64, caller float32`). No data conversion or transpose is
+performed. Default Fortran `logical` is **not** an ONNX BOOL buffer: use
+`logical(c_bool)` and `.true._c_bool` / `.false._c_bool`.
+
+With `nvfortran`, compile applications that use BOOL buffers with
+`-Munixlogical` so true values are stored as 1, not the default all-one bits.
+The default FortONNX `nvfortran` flags include this option; keep it when
+overriding `FFLAGS` or compiling an application separately. See the
+[NVIDIA compiler reference](https://docs.nvidia.com/hpc-sdk/compilers/hpc-compilers-ref-guide/).
+
+```fortran
+real(c_double), target :: state(2, rows), values(2, rows)
+logical(c_bool), target :: enabled(2, rows), valid(2, rows)
+type(fortonnx_tensor) :: inputs(2), outputs(2)
+
+inputs = [fortonnx_host_tensor(state, 'state'), &
+          fortonnx_host_tensor(enabled, 'enabled')]
+outputs = [fortonnx_host_tensor(values, 'values'), &
+           fortonnx_host_tensor(valid, 'valid')]
+call runtime%bind('scientific', inputs, outputs, status)
+```
+
+Inspect model types with `runtime%tensor_type(name, fortonnx_input, index,
+element_type, status)` (or `fortonnx_output`); indices are one-based, as with
+`tensor_shape`. C callers use `fortonnx_session_get_tensor_type_at`, with
+zero-based indices.
+
+CPU and CUDA buffer paths preserve all FP64 bits. TensorRT requests containing
+FP64 in tensor types, constants, nested graphs or function bodies instead use
+CUDA for the entire model, preventing TensorRT DOUBLE-weight downcasts.
+Uninspectable graphs conservatively use CUDA too. Unsupported CUDA operators
+produce a load/run error rather than silently using host buffers or FP32.
 
 ## Fortran and ONNX axis order
 
@@ -93,6 +144,27 @@ inputs(1) = fortonnx_pointer_tensor(image_ptr, image_shape, fortonnx_cuda, 'imag
 inputs(2) = fortonnx_pointer_tensor(scale_ptr, scale_shape, fortonnx_cuda, 'scale')
 call runtime%bind('model', inputs, output_view, status)
 ```
+
+Pointer views take an optional `element_type` keyword, defaulting to float32
+for backwards compatibility:
+
+```fortran
+inputs(1) = fortonnx_pointer_tensor(state_ptr, state_shape, fortonnx_cuda, &
+    'state', element_type=fortonnx_float64)
+outputs(1) = fortonnx_pointer_tensor(valid_ptr, valid_shape, fortonnx_cuda, &
+    'valid', element_type=fortonnx_bool)
+```
+
+The single-I/O pointer `bind` overloads likewise accept optional trailing
+`input_type` and `output_type` keywords (both default to `fortonnx_float32`),
+with either explicit shapes or the legacy batch-size argument. The caller is
+responsible for the actual allocation size and correct type tag.
+
+The C `_typed` entry points (`fortonnx_session_bind_input_typed`,
+`fortonnx_session_bind_output_typed`, `fortonnx_session_bind_tensor_typed`)
+accept explicit element-type tags. The original C functions remain float32
+bindings. The shared CPU/CUDA bridge computes overflow-checked byte counts
+using the model type and creates ONNX tensors of exactly that type.
 
 ## CUDA Fortran arrays
 

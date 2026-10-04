@@ -16,6 +16,10 @@ module fortonnx
   integer(c_int), parameter, public :: fortonnx_invalid_argument = 1_c_int
   integer(c_int), parameter, public :: fortonnx_runtime_error = 2_c_int
 
+  integer(c_int), parameter, public :: fortonnx_float32 = 1_c_int
+  integer(c_int), parameter, public :: fortonnx_bool = 9_c_int
+  integer(c_int), parameter, public :: fortonnx_float64 = 11_c_int
+
   type, public :: fortonnx_options
     integer(c_int) :: backend = fortonnx_cpu
     integer(c_int) :: device_id = 0_c_int
@@ -42,20 +46,38 @@ module fortonnx
     integer(c_int64_t), allocatable :: shape(:)
     character(len=:), allocatable :: name
     integer(c_int) :: memory_backend = -1_c_int
+    integer(c_int) :: element_type = fortonnx_float32
   end type fortonnx_tensor
 
+  interface fortonnx_host_tensor
+    module procedure make_host_tensor_float32, make_host_tensor_float64, make_host_tensor_bool
+  end interface fortonnx_host_tensor
   public :: fortonnx_host_tensor
   public :: fortonnx_pointer_tensor
 
 #ifdef FORTONNX_WITH_CUDA_FORTRAN
   interface fortonnx_device_tensor
     module procedure make_device_tensor_1d
+    module procedure make_device_tensor_1d_bool
+    module procedure make_device_tensor_1d_float64
     module procedure make_device_tensor_2d
+    module procedure make_device_tensor_2d_bool
+    module procedure make_device_tensor_2d_float64
     module procedure make_device_tensor_3d
+    module procedure make_device_tensor_3d_bool
+    module procedure make_device_tensor_3d_float64
     module procedure make_device_tensor_4d
+    module procedure make_device_tensor_4d_bool
+    module procedure make_device_tensor_4d_float64
     module procedure make_device_tensor_5d
+    module procedure make_device_tensor_5d_bool
+    module procedure make_device_tensor_5d_float64
     module procedure make_device_tensor_6d
+    module procedure make_device_tensor_6d_bool
+    module procedure make_device_tensor_6d_float64
     module procedure make_device_tensor_7d
+    module procedure make_device_tensor_7d_bool
+    module procedure make_device_tensor_7d_float64
   end interface fortonnx_device_tensor
   public :: fortonnx_device_tensor
 #endif
@@ -98,6 +120,14 @@ module fortonnx
     procedure, public :: initialize => runtime_initialize
     procedure, public :: load => runtime_load
     procedure, private :: bind_host_array => runtime_bind_host_array
+    procedure, private :: bind_host_bool_bool => runtime_bind_host_bool_bool
+    procedure, private :: bind_host_bool_float64 => runtime_bind_host_bool_float64
+    procedure, private :: bind_host_bool_float32 => runtime_bind_host_bool_float32
+    procedure, private :: bind_host_float64_bool => runtime_bind_host_float64_bool
+    procedure, private :: bind_host_float64_float64 => runtime_bind_host_float64_float64
+    procedure, private :: bind_host_float64_float32 => runtime_bind_host_float64_float32
+    procedure, private :: bind_host_float32_bool => runtime_bind_host_float32_bool
+    procedure, private :: bind_host_float32_float64 => runtime_bind_host_float32_float64
     procedure, private :: bind_pointer_batch => runtime_bind_pointer_batch
     procedure, private :: bind_pointer_shapes => runtime_bind_pointer_shapes
     procedure, private :: bind_tensor_pair => runtime_bind_tensor_pair
@@ -111,6 +141,118 @@ module fortonnx
     procedure, private :: bind_device_array_5d => runtime_bind_device_array_5d
     procedure, private :: bind_device_array_6d => runtime_bind_device_array_6d
     procedure, private :: bind_device_array_7d => runtime_bind_device_array_7d
+    procedure, private :: bind_device_7d_bool_bool => runtime_bind_device_7d_bool_bool
+    procedure, private :: bind_device_7d_bool_float64 => runtime_bind_device_7d_bool_float64
+    procedure, private :: bind_device_7d_bool_float32 => runtime_bind_device_7d_bool_float32
+    procedure, private :: bind_device_7d_float64_bool => runtime_bind_device_7d_float64_bool
+    procedure, private :: bind_device_7d_float64_float64 => runtime_bind_device_7d_float64_float64
+    procedure, private :: bind_device_7d_float64_float32 => runtime_bind_device_7d_float64_float32
+    procedure, private :: bind_device_7d_float32_bool => runtime_bind_device_7d_float32_bool
+    procedure, private :: bind_device_7d_float32_float64 => runtime_bind_device_7d_float32_float64
+    procedure, private :: bind_device_6d_bool_bool => runtime_bind_device_6d_bool_bool
+    procedure, private :: bind_device_6d_bool_float64 => runtime_bind_device_6d_bool_float64
+    procedure, private :: bind_device_6d_bool_float32 => runtime_bind_device_6d_bool_float32
+    procedure, private :: bind_device_6d_float64_bool => runtime_bind_device_6d_float64_bool
+    procedure, private :: bind_device_6d_float64_float64 => runtime_bind_device_6d_float64_float64
+    procedure, private :: bind_device_6d_float64_float32 => runtime_bind_device_6d_float64_float32
+    procedure, private :: bind_device_6d_float32_bool => runtime_bind_device_6d_float32_bool
+    procedure, private :: bind_device_6d_float32_float64 => runtime_bind_device_6d_float32_float64
+    procedure, private :: bind_device_5d_bool_bool => runtime_bind_device_5d_bool_bool
+    procedure, private :: bind_device_5d_bool_float64 => runtime_bind_device_5d_bool_float64
+    procedure, private :: bind_device_5d_bool_float32 => runtime_bind_device_5d_bool_float32
+    procedure, private :: bind_device_5d_float64_bool => runtime_bind_device_5d_float64_bool
+    procedure, private :: bind_device_5d_float64_float64 => runtime_bind_device_5d_float64_float64
+    procedure, private :: bind_device_5d_float64_float32 => runtime_bind_device_5d_float64_float32
+    procedure, private :: bind_device_5d_float32_bool => runtime_bind_device_5d_float32_bool
+    procedure, private :: bind_device_5d_float32_float64 => runtime_bind_device_5d_float32_float64
+    procedure, private :: bind_device_4d_bool_bool => runtime_bind_device_4d_bool_bool
+    procedure, private :: bind_device_4d_bool_float64 => runtime_bind_device_4d_bool_float64
+    procedure, private :: bind_device_4d_bool_float32 => runtime_bind_device_4d_bool_float32
+    procedure, private :: bind_device_4d_float64_bool => runtime_bind_device_4d_float64_bool
+    procedure, private :: bind_device_4d_float64_float64 => runtime_bind_device_4d_float64_float64
+    procedure, private :: bind_device_4d_float64_float32 => runtime_bind_device_4d_float64_float32
+    procedure, private :: bind_device_4d_float32_bool => runtime_bind_device_4d_float32_bool
+    procedure, private :: bind_device_4d_float32_float64 => runtime_bind_device_4d_float32_float64
+    procedure, private :: bind_device_3d_bool_bool => runtime_bind_device_3d_bool_bool
+    procedure, private :: bind_device_3d_bool_float64 => runtime_bind_device_3d_bool_float64
+    procedure, private :: bind_device_3d_bool_float32 => runtime_bind_device_3d_bool_float32
+    procedure, private :: bind_device_3d_float64_bool => runtime_bind_device_3d_float64_bool
+    procedure, private :: bind_device_3d_float64_float64 => runtime_bind_device_3d_float64_float64
+    procedure, private :: bind_device_3d_float64_float32 => runtime_bind_device_3d_float64_float32
+    procedure, private :: bind_device_3d_float32_bool => runtime_bind_device_3d_float32_bool
+    procedure, private :: bind_device_3d_float32_float64 => runtime_bind_device_3d_float32_float64
+    procedure, private :: bind_device_2d_bool_bool => runtime_bind_device_2d_bool_bool
+    procedure, private :: bind_device_2d_bool_float64 => runtime_bind_device_2d_bool_float64
+    procedure, private :: bind_device_2d_bool_float32 => runtime_bind_device_2d_bool_float32
+    procedure, private :: bind_device_2d_float64_bool => runtime_bind_device_2d_float64_bool
+    procedure, private :: bind_device_2d_float64_float64 => runtime_bind_device_2d_float64_float64
+    procedure, private :: bind_device_2d_float64_float32 => runtime_bind_device_2d_float64_float32
+    procedure, private :: bind_device_2d_float32_bool => runtime_bind_device_2d_float32_bool
+    procedure, private :: bind_device_2d_float32_float64 => runtime_bind_device_2d_float32_float64
+    procedure, private :: bind_device_1d_bool_bool => runtime_bind_device_1d_bool_bool
+    procedure, private :: bind_device_1d_bool_float64 => runtime_bind_device_1d_bool_float64
+    procedure, private :: bind_device_1d_bool_float32 => runtime_bind_device_1d_bool_float32
+    procedure, private :: bind_device_1d_float64_bool => runtime_bind_device_1d_float64_bool
+    procedure, private :: bind_device_1d_float64_float64 => runtime_bind_device_1d_float64_float64
+    procedure, private :: bind_device_1d_float64_float32 => runtime_bind_device_1d_float64_float32
+    procedure, private :: bind_device_1d_float32_bool => runtime_bind_device_1d_float32_bool
+    procedure, private :: bind_device_1d_float32_float64 => runtime_bind_device_1d_float32_float64
+    generic, public :: bind => bind_device_1d_float32_float64
+    generic, public :: bind => bind_device_1d_float32_bool
+    generic, public :: bind => bind_device_1d_float64_float32
+    generic, public :: bind => bind_device_1d_float64_float64
+    generic, public :: bind => bind_device_1d_float64_bool
+    generic, public :: bind => bind_device_1d_bool_float32
+    generic, public :: bind => bind_device_1d_bool_float64
+    generic, public :: bind => bind_device_1d_bool_bool
+    generic, public :: bind => bind_device_2d_float32_float64
+    generic, public :: bind => bind_device_2d_float32_bool
+    generic, public :: bind => bind_device_2d_float64_float32
+    generic, public :: bind => bind_device_2d_float64_float64
+    generic, public :: bind => bind_device_2d_float64_bool
+    generic, public :: bind => bind_device_2d_bool_float32
+    generic, public :: bind => bind_device_2d_bool_float64
+    generic, public :: bind => bind_device_2d_bool_bool
+    generic, public :: bind => bind_device_3d_float32_float64
+    generic, public :: bind => bind_device_3d_float32_bool
+    generic, public :: bind => bind_device_3d_float64_float32
+    generic, public :: bind => bind_device_3d_float64_float64
+    generic, public :: bind => bind_device_3d_float64_bool
+    generic, public :: bind => bind_device_3d_bool_float32
+    generic, public :: bind => bind_device_3d_bool_float64
+    generic, public :: bind => bind_device_3d_bool_bool
+    generic, public :: bind => bind_device_4d_float32_float64
+    generic, public :: bind => bind_device_4d_float32_bool
+    generic, public :: bind => bind_device_4d_float64_float32
+    generic, public :: bind => bind_device_4d_float64_float64
+    generic, public :: bind => bind_device_4d_float64_bool
+    generic, public :: bind => bind_device_4d_bool_float32
+    generic, public :: bind => bind_device_4d_bool_float64
+    generic, public :: bind => bind_device_4d_bool_bool
+    generic, public :: bind => bind_device_5d_float32_float64
+    generic, public :: bind => bind_device_5d_float32_bool
+    generic, public :: bind => bind_device_5d_float64_float32
+    generic, public :: bind => bind_device_5d_float64_float64
+    generic, public :: bind => bind_device_5d_float64_bool
+    generic, public :: bind => bind_device_5d_bool_float32
+    generic, public :: bind => bind_device_5d_bool_float64
+    generic, public :: bind => bind_device_5d_bool_bool
+    generic, public :: bind => bind_device_6d_float32_float64
+    generic, public :: bind => bind_device_6d_float32_bool
+    generic, public :: bind => bind_device_6d_float64_float32
+    generic, public :: bind => bind_device_6d_float64_float64
+    generic, public :: bind => bind_device_6d_float64_bool
+    generic, public :: bind => bind_device_6d_bool_float32
+    generic, public :: bind => bind_device_6d_bool_float64
+    generic, public :: bind => bind_device_6d_bool_bool
+    generic, public :: bind => bind_device_7d_float32_float64
+    generic, public :: bind => bind_device_7d_float32_bool
+    generic, public :: bind => bind_device_7d_float64_float32
+    generic, public :: bind => bind_device_7d_float64_float64
+    generic, public :: bind => bind_device_7d_float64_bool
+    generic, public :: bind => bind_device_7d_bool_float32
+    generic, public :: bind => bind_device_7d_bool_float64
+    generic, public :: bind => bind_device_7d_bool_bool
     generic, public :: bind => bind_host_array, bind_pointer_batch, &
         bind_pointer_shapes, bind_tensor_pair, bind_tensor_inputs, &
         bind_tensor_arrays, bind_device_array_1d, &
@@ -120,12 +262,21 @@ module fortonnx
     generic, public :: bind => bind_host_array, bind_pointer_batch, bind_pointer_shapes, &
         bind_tensor_pair, bind_tensor_inputs, bind_tensor_arrays
 #endif
+    generic, public :: bind => bind_host_float32_float64
+    generic, public :: bind => bind_host_float32_bool
+    generic, public :: bind => bind_host_float64_float32
+    generic, public :: bind => bind_host_float64_float64
+    generic, public :: bind => bind_host_float64_bool
+    generic, public :: bind => bind_host_bool_float32
+    generic, public :: bind => bind_host_bool_float64
+    generic, public :: bind => bind_host_bool_bool
     procedure, public :: run => runtime_run
     procedure, public :: run_all => runtime_run_all
     procedure, public :: features => runtime_features
     procedure, public :: shapes => runtime_shapes
     procedure, public :: io_counts => runtime_io_counts
     procedure, public :: tensor_shape => runtime_tensor_shape
+    procedure, public :: tensor_type => runtime_tensor_type
     procedure, public :: find => runtime_find
     procedure, public :: size => runtime_size
     procedure, public :: is_initialized => runtime_is_initialized
@@ -135,27 +286,71 @@ module fortonnx
 
 contains
 
-  function fortonnx_host_tensor(array, name) result(tensor)
+  function host_data_pointer(array) result(data)
+    type(*), contiguous, target, intent(inout) :: array(..)
+    type(c_ptr) :: data
+
+    ! The assumed-type descriptor avoids nvfortran 25.9's incorrect
+    ! C_LOC base-address calculation for typed assumed-rank arrays.
+    data = c_loc(array)
+  end function host_data_pointer
+
+  function make_host_tensor_float32(array, name) result(tensor)
     real(c_float), contiguous, target, intent(inout) :: array(..)
     character(len=*), intent(in), optional :: name
     type(fortonnx_tensor) :: tensor
     integer(c_int64_t), allocatable :: fortran_shape(:)
 
-    tensor%data = c_loc(array)
+    tensor%element_type = fortonnx_float32
+    tensor%data = host_data_pointer(array)
     fortran_shape = shape(array, kind=c_int64_t)
     allocate(tensor%shape(size(fortran_shape)))
-    tensor%shape = fortran_shape(size(fortran_shape):1:-1)
+    ! Avoid allocatable reallocation: nvfortran 25.9 miscomputes the
+    ! reverse-section extent for ranks greater than one in this assignment.
+    tensor%shape(:) = fortran_shape(size(fortran_shape):1:-1)
     tensor%memory_backend = fortonnx_cpu
     if (present(name)) tensor%name = trim(name)
-  end function fortonnx_host_tensor
+  end function make_host_tensor_float32
 
-  function fortonnx_pointer_tensor(data, onnx_shape, memory_backend, name) result(tensor)
+  function make_host_tensor_float64(array, name) result(tensor)
+    real(c_double), contiguous, target, intent(inout) :: array(..)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    integer(c_int64_t), allocatable :: fortran_shape(:)
+
+    tensor%element_type = fortonnx_float64
+    tensor%data = host_data_pointer(array)
+    fortran_shape = shape(array, kind=c_int64_t)
+    allocate(tensor%shape(size(fortran_shape)))
+    tensor%shape(:) = fortran_shape(size(fortran_shape):1:-1)
+    tensor%memory_backend = fortonnx_cpu
+    if (present(name)) tensor%name = trim(name)
+  end function make_host_tensor_float64
+
+  function make_host_tensor_bool(array, name) result(tensor)
+    logical(c_bool), contiguous, target, intent(inout) :: array(..)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    integer(c_int64_t), allocatable :: fortran_shape(:)
+
+    tensor%element_type = fortonnx_bool
+    tensor%data = host_data_pointer(array)
+    fortran_shape = shape(array, kind=c_int64_t)
+    allocate(tensor%shape(size(fortran_shape)))
+    tensor%shape(:) = fortran_shape(size(fortran_shape):1:-1)
+    tensor%memory_backend = fortonnx_cpu
+    if (present(name)) tensor%name = trim(name)
+  end function make_host_tensor_bool
+
+  function fortonnx_pointer_tensor(data, onnx_shape, memory_backend, name, element_type) result(tensor)
     type(c_ptr), intent(in) :: data
     integer(c_int64_t), intent(in) :: onnx_shape(:)
     integer(c_int), intent(in) :: memory_backend
     character(len=*), intent(in), optional :: name
+    integer(c_int), intent(in), optional :: element_type
     type(fortonnx_tensor) :: tensor
 
+    if (present(element_type)) tensor%element_type = element_type
     tensor%data = data
     allocate(tensor%shape(size(onnx_shape)))
     tensor%shape = onnx_shape
@@ -363,12 +558,13 @@ contains
   end subroutine runtime_load
 
   subroutine reverse_shape(array, onnx_shape)
-    real(c_float), contiguous, intent(in) :: array(..)
+    class(*), contiguous, intent(in) :: array(..)
     integer(c_int64_t), allocatable, intent(out) :: onnx_shape(:)
     integer(c_int64_t), allocatable :: fortran_shape(:)
 
     fortran_shape = shape(array, kind=c_int64_t)
-    onnx_shape = fortran_shape(size(fortran_shape):1:-1)
+    allocate(onnx_shape(size(fortran_shape)))
+    onnx_shape(:) = fortran_shape(size(fortran_shape):1:-1)
   end subroutine reverse_shape
 
   subroutine apply_legacy_vector_shape(self, name, input_shape, output_shape)
@@ -413,16 +609,209 @@ contains
     call reverse_shape(input, input_shape)
     call reverse_shape(output, output_shape)
     call apply_legacy_vector_shape(self, name, input_shape, output_shape)
-    call runtime_bind_pointer_shapes(self, name, c_loc(input), c_loc(output), &
-        input_shape, output_shape, status)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float32, fortonnx_float32)
   end subroutine runtime_bind_host_array
 
-  subroutine runtime_bind_pointer_batch(self, name, input, output, batch_size, status)
+  subroutine runtime_bind_host_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), contiguous, target, intent(inout) :: input(..)
+    real(c_double), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float32, fortonnx_float64)
+  end subroutine runtime_bind_host_float32_float64
+
+  subroutine runtime_bind_host_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), contiguous, target, intent(inout) :: input(..)
+    logical(c_bool), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float32, fortonnx_bool)
+  end subroutine runtime_bind_host_float32_bool
+
+  subroutine runtime_bind_host_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), contiguous, target, intent(inout) :: input(..)
+    real(c_float), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float64, fortonnx_float32)
+  end subroutine runtime_bind_host_float64_float32
+
+  subroutine runtime_bind_host_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), contiguous, target, intent(inout) :: input(..)
+    real(c_double), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float64, fortonnx_float64)
+  end subroutine runtime_bind_host_float64_float64
+
+  subroutine runtime_bind_host_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), contiguous, target, intent(inout) :: input(..)
+    logical(c_bool), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_float64, fortonnx_bool)
+  end subroutine runtime_bind_host_float64_bool
+
+  subroutine runtime_bind_host_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), contiguous, target, intent(inout) :: input(..)
+    real(c_float), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_bool, fortonnx_float32)
+  end subroutine runtime_bind_host_bool_float32
+
+  subroutine runtime_bind_host_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), contiguous, target, intent(inout) :: input(..)
+    real(c_double), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_bool, fortonnx_float64)
+  end subroutine runtime_bind_host_bool_float64
+
+  subroutine runtime_bind_host_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), contiguous, target, intent(inout) :: input(..)
+    logical(c_bool), contiguous, target, intent(inout) :: output(..)
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: input_shape(:), output_shape(:)
+
+    call status%clear()
+    if (self%options%backend /= fortonnx_cpu) then
+      call set_status(status, fortonnx_invalid_argument, 'host buffers require the CPU backend')
+      return
+    end if
+    if (size(input) < 1 .or. size(output) < 1) then
+      call set_status(status, fortonnx_invalid_argument, 'tensor arrays must not be empty')
+      return
+    end if
+    call reverse_shape(input, input_shape)
+    call reverse_shape(output, output_shape)
+    call apply_legacy_vector_shape(self, name, input_shape, output_shape)
+    call runtime_bind_pointer_shapes(self, name, host_data_pointer(input), host_data_pointer(output), &
+        input_shape, output_shape, status, fortonnx_bool, fortonnx_bool)
+  end subroutine runtime_bind_host_bool_bool
+
+  subroutine runtime_bind_pointer_batch(self, name, input, output, batch_size, status, input_type, output_type)
     class(fortonnx_runtime), intent(inout) :: self
     character(len=*), intent(in) :: name
     type(c_ptr), intent(in) :: input, output
     integer(c_int64_t), intent(in) :: batch_size
     type(fortonnx_status), intent(inout) :: status
+    integer(c_int), intent(in), optional :: input_type, output_type
     integer :: index
     integer(c_int64_t) :: input_shape(2), output_shape(2)
 
@@ -449,17 +838,18 @@ contains
     input_shape = [batch_size, self%models(index)%inputs(1)%shape(2)]
     output_shape = [batch_size, self%models(index)%outputs(1)%shape(2)]
     call runtime_bind_pointer_shapes(self, name, input, output, &
-        input_shape, output_shape, status)
+        input_shape, output_shape, status, input_type, output_type)
   end subroutine runtime_bind_pointer_batch
 
   subroutine runtime_bind_pointer_shapes(self, name, input, output, &
-      input_shape, output_shape, status)
+      input_shape, output_shape, status, input_type, output_type)
     class(fortonnx_runtime), intent(inout) :: self
     character(len=*), intent(in) :: name
     type(c_ptr), intent(in) :: input, output
     integer(c_int64_t), contiguous, intent(in) :: input_shape(:), output_shape(:)
     type(fortonnx_status), intent(inout) :: status
-    integer(c_int) :: code
+    integer(c_int), intent(in), optional :: input_type, output_type
+    integer(c_int) :: code, in_type, out_type
     integer :: index
 
     call status%clear()
@@ -478,9 +868,14 @@ contains
       call set_status(status, fortonnx_invalid_argument, 'unknown model: ' // trim(name))
       return
     end if
-    code = c_fortonnx_session_bind_tensor(self%models(index)%session, input, output, &
+    self%models(index)%bound = .false.
+    in_type = fortonnx_float32
+    out_type = fortonnx_float32
+    if (present(input_type)) in_type = input_type
+    if (present(output_type)) out_type = output_type
+    code = c_fortonnx_session_bind_tensor_typed(self%models(index)%session, input, output, &
         self%options%backend, input_shape, int(size(input_shape), c_int64_t), &
-        output_shape, int(size(output_shape), c_int64_t))
+        output_shape, int(size(output_shape), c_int64_t), in_type, out_type)
     if (code /= 0_c_int) then
       call set_c_error(status, 'failed to bind tensor buffers', self%models(index)%session)
       return
@@ -620,9 +1015,9 @@ contains
         return
       end if
       input_seen(int(tensor_index) + 1) = .true.
-      code = c_fortonnx_session_bind_input(self%models(index)%session, tensor_index, &
+      code = c_fortonnx_session_bind_input_typed(self%models(index)%session, tensor_index, &
           inputs(position)%data, inputs(position)%memory_backend, inputs(position)%shape, &
-          int(size(inputs(position)%shape), c_int64_t))
+          int(size(inputs(position)%shape), c_int64_t), inputs(position)%element_type)
       if (code /= 0_c_int) then
         call set_c_error(status, 'failed to bind an input tensor', self%models(index)%session)
         return
@@ -641,9 +1036,9 @@ contains
         return
       end if
       output_seen(int(tensor_index) + 1) = .true.
-      code = c_fortonnx_session_bind_output(self%models(index)%session, tensor_index, &
+      code = c_fortonnx_session_bind_output_typed(self%models(index)%session, tensor_index, &
           outputs(position)%data, outputs(position)%memory_backend, outputs(position)%shape, &
-          int(size(outputs(position)%shape), c_int64_t))
+          int(size(outputs(position)%shape), c_int64_t), outputs(position)%element_type)
       if (code /= 0_c_int) then
         call set_c_error(status, 'failed to bind an output tensor', self%models(index)%session)
         return
@@ -740,6 +1135,28 @@ contains
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_1d
 
+  function make_device_tensor_1d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_1d_float64
+
+  function make_device_tensor_1d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_1d_bool
+
   function make_device_tensor_2d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :)
     character(len=*), intent(in), optional :: name
@@ -749,6 +1166,28 @@ contains
     tensor%memory_backend = fortonnx_cuda
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_2d
+
+  function make_device_tensor_2d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_2d_float64
+
+  function make_device_tensor_2d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_2d_bool
 
   function make_device_tensor_3d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :, :)
@@ -761,6 +1200,30 @@ contains
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_3d
 
+  function make_device_tensor_3d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_3d_float64
+
+  function make_device_tensor_3d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_3d_bool
+
   function make_device_tensor_4d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :, :, :)
     character(len=*), intent(in), optional :: name
@@ -771,6 +1234,30 @@ contains
     tensor%memory_backend = fortonnx_cuda
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_4d
+
+  function make_device_tensor_4d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 4), c_int64_t), int(size(array, 3), c_int64_t), &
+        int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_4d_float64
+
+  function make_device_tensor_4d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 4), c_int64_t), int(size(array, 3), c_int64_t), &
+        int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_4d_bool
 
   function make_device_tensor_5d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :, :, :, :)
@@ -784,6 +1271,32 @@ contains
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_5d
 
+  function make_device_tensor_5d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 5), c_int64_t), int(size(array, 4), c_int64_t), &
+        int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_5d_float64
+
+  function make_device_tensor_5d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 5), c_int64_t), int(size(array, 4), c_int64_t), &
+        int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_5d_bool
+
   function make_device_tensor_6d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :)
     character(len=*), intent(in), optional :: name
@@ -795,6 +1308,32 @@ contains
     tensor%memory_backend = fortonnx_cuda
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_6d
+
+  function make_device_tensor_6d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 6), c_int64_t), int(size(array, 5), c_int64_t), &
+        int(size(array, 4), c_int64_t), int(size(array, 3), c_int64_t), &
+        int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_6d_float64
+
+  function make_device_tensor_6d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 6), c_int64_t), int(size(array, 5), c_int64_t), &
+        int(size(array, 4), c_int64_t), int(size(array, 3), c_int64_t), &
+        int(size(array, 2), c_int64_t), int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_6d_bool
 
   function make_device_tensor_7d(array, name) result(tensor)
     real(c_float), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :, :)
@@ -808,6 +1347,34 @@ contains
     tensor%memory_backend = fortonnx_cuda
     if (present(name)) tensor%name = trim(name)
   end function make_device_tensor_7d
+
+  function make_device_tensor_7d_float64(array, name) result(tensor)
+    real(c_double), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_float64
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 7), c_int64_t), int(size(array, 6), c_int64_t), &
+        int(size(array, 5), c_int64_t), int(size(array, 4), c_int64_t), &
+        int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_7d_float64
+
+  function make_device_tensor_7d_bool(array, name) result(tensor)
+    logical(c_bool), device, target, contiguous, intent(inout) :: array(:, :, :, :, :, :, :)
+    character(len=*), intent(in), optional :: name
+    type(fortonnx_tensor) :: tensor
+    tensor%element_type = fortonnx_bool
+    tensor%data = transfer(c_devloc(array), c_null_ptr)
+    tensor%shape = [int(size(array, 7), c_int64_t), int(size(array, 6), c_int64_t), &
+        int(size(array, 5), c_int64_t), int(size(array, 4), c_int64_t), &
+        int(size(array, 3), c_int64_t), int(size(array, 2), c_int64_t), &
+        int(size(array, 1), c_int64_t)]
+    tensor%memory_backend = fortonnx_cuda
+    if (present(name)) tensor%name = trim(name)
+  end function make_device_tensor_7d_bool
 
   subroutine runtime_bind_device_array_1d(self, name, input, output, status)
     class(fortonnx_runtime), intent(inout) :: self
@@ -872,6 +1439,566 @@ contains
     call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
         fortonnx_device_tensor(output), status)
   end subroutine runtime_bind_device_array_7d
+
+  subroutine runtime_bind_device_7d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_bool_bool
+
+  subroutine runtime_bind_device_7d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_bool_float64
+
+  subroutine runtime_bind_device_7d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_bool_float32
+
+  subroutine runtime_bind_device_7d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_float64_bool
+
+  subroutine runtime_bind_device_7d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_float64_float64
+
+  subroutine runtime_bind_device_7d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_float64_float32
+
+  subroutine runtime_bind_device_7d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_float32_bool
+
+  subroutine runtime_bind_device_7d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_7d_float32_float64
+
+  subroutine runtime_bind_device_6d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_bool_bool
+
+  subroutine runtime_bind_device_6d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_bool_float64
+
+  subroutine runtime_bind_device_6d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_bool_float32
+
+  subroutine runtime_bind_device_6d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_float64_bool
+
+  subroutine runtime_bind_device_6d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_float64_float64
+
+  subroutine runtime_bind_device_6d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_float64_float32
+
+  subroutine runtime_bind_device_6d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_float32_bool
+
+  subroutine runtime_bind_device_6d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_6d_float32_float64
+
+  subroutine runtime_bind_device_5d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_bool_bool
+
+  subroutine runtime_bind_device_5d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_bool_float64
+
+  subroutine runtime_bind_device_5d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_bool_float32
+
+  subroutine runtime_bind_device_5d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_float64_bool
+
+  subroutine runtime_bind_device_5d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_float64_float64
+
+  subroutine runtime_bind_device_5d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_float64_float32
+
+  subroutine runtime_bind_device_5d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_float32_bool
+
+  subroutine runtime_bind_device_5d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_5d_float32_float64
+
+  subroutine runtime_bind_device_4d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_bool_bool
+
+  subroutine runtime_bind_device_4d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_bool_float64
+
+  subroutine runtime_bind_device_4d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_bool_float32
+
+  subroutine runtime_bind_device_4d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_float64_bool
+
+  subroutine runtime_bind_device_4d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_float64_float64
+
+  subroutine runtime_bind_device_4d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_float64_float32
+
+  subroutine runtime_bind_device_4d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_float32_bool
+
+  subroutine runtime_bind_device_4d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_4d_float32_float64
+
+  subroutine runtime_bind_device_3d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_bool_bool
+
+  subroutine runtime_bind_device_3d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_bool_float64
+
+  subroutine runtime_bind_device_3d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_bool_float32
+
+  subroutine runtime_bind_device_3d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_float64_bool
+
+  subroutine runtime_bind_device_3d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_float64_float64
+
+  subroutine runtime_bind_device_3d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_float64_float32
+
+  subroutine runtime_bind_device_3d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_float32_bool
+
+  subroutine runtime_bind_device_3d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_3d_float32_float64
+
+  subroutine runtime_bind_device_2d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_bool_bool
+
+  subroutine runtime_bind_device_2d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_bool_float64
+
+  subroutine runtime_bind_device_2d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_bool_float32
+
+  subroutine runtime_bind_device_2d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_float64_bool
+
+  subroutine runtime_bind_device_2d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_float64_float64
+
+  subroutine runtime_bind_device_2d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:, :)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_float64_float32
+
+  subroutine runtime_bind_device_2d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_float32_bool
+
+  subroutine runtime_bind_device_2d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:, :)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:, :)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_2d_float32_float64
+
+  subroutine runtime_bind_device_1d_bool_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_bool_bool
+
+  subroutine runtime_bind_device_1d_bool_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_bool_float64
+
+  subroutine runtime_bind_device_1d_bool_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    logical(c_bool), device, target, contiguous, intent(inout) :: input(:)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_bool_float32
+
+  subroutine runtime_bind_device_1d_float64_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_float64_bool
+
+  subroutine runtime_bind_device_1d_float64_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_float64_float64
+
+  subroutine runtime_bind_device_1d_float64_float32(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_double), device, target, contiguous, intent(inout) :: input(:)
+    real(c_float), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_float64_float32
+
+  subroutine runtime_bind_device_1d_float32_bool(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:)
+    logical(c_bool), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_float32_bool
+
+  subroutine runtime_bind_device_1d_float32_float64(self, name, input, output, status)
+    class(fortonnx_runtime), intent(inout) :: self
+    character(len=*), intent(in) :: name
+    real(c_float), device, target, contiguous, intent(inout) :: input(:)
+    real(c_double), device, target, contiguous, intent(inout) :: output(:)
+    type(fortonnx_status), intent(inout) :: status
+    call runtime_bind_tensor_pair(self, name, fortonnx_device_tensor(input), &
+        fortonnx_device_tensor(output), status)
+  end subroutine runtime_bind_device_1d_float32_float64
 #endif
 
   subroutine runtime_run(self, name, status)
@@ -1027,6 +2154,26 @@ contains
       tensor_shape = self%models(index)%outputs(tensor_index)%shape
     end if
   end subroutine runtime_tensor_shape
+
+  subroutine runtime_tensor_type(self, name, is_input, tensor_index, element_type, status)
+    class(fortonnx_runtime), intent(in) :: self
+    character(len=*), intent(in) :: name
+    integer(c_int), intent(in) :: is_input
+    integer, intent(in) :: tensor_index
+    integer(c_int), intent(out) :: element_type
+    type(fortonnx_status), intent(inout) :: status
+    integer(c_int64_t), allocatable :: checked_shape(:)
+    integer(c_int) :: code
+    integer :: index
+
+    element_type = 0_c_int
+    call runtime_tensor_shape(self, name, is_input, tensor_index, checked_shape, status)
+    if (.not. status%ok()) return
+    index = self%find(name)
+    code = c_fortonnx_session_get_tensor_type_at(self%models(index)%session, &
+        is_input, int(tensor_index - 1, c_int64_t), element_type)
+    if (code /= 0_c_int) call set_c_error(status, 'failed to inspect tensor type', self%models(index)%session)
+  end subroutine runtime_tensor_type
 
   integer function runtime_find(self, name) result(index)
     class(fortonnx_runtime), intent(in) :: self
