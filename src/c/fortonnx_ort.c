@@ -142,6 +142,16 @@ fail:
   return 1;
 }
 
+/* Record of a cuda_graph binding: its run options and the bound addresses and shapes. */
+static void release_graph_slot(FortonnxSession* session, FortonnxGraphSlot* item) {
+  if (item->run_options != NULL) session->api->ReleaseRunOptions(item->run_options);
+  free(item->data);
+  free(item->shape);
+  item->run_options = NULL;
+  item->data = NULL;
+  item->shape = NULL;
+}
+
 static void release_tensor_values(FortonnxSession* session) {
   size_t index;
   if (session == NULL || session->api == NULL) return;
@@ -165,6 +175,7 @@ static void release_tensor_metadata(FortonnxTensor* tensors, size_t count) {
   for (index = 0; index < count; ++index) {
     free(tensors[index].name);
     free(tensors[index].shape);
+    free(tensors[index].bound_shape);
   }
   free(tensors);
 }
@@ -181,6 +192,7 @@ void fortonnx_session_destroy(void* opaque) {
     session->api->ClearBoundOutputs(session->binding);
   }
   release_tensor_values(session);
+  while (session->graph_count > 0) release_graph_slot(session, &session->graphs[--session->graph_count]);
   if (session->binding != NULL) session->api->ReleaseIoBinding(session->binding);
   if (session->run_options != NULL) session->api->ReleaseRunOptions(session->run_options);
   if (session->memory_info != NULL) session->api->ReleaseMemoryInfo(session->memory_info);
@@ -544,6 +556,14 @@ static int bind_one_tensor(
           session, session->api->CreateTensorWithDataAsOrtValue(
                        session->memory_info, data, bytes, shape, tensor->rank,
                        tensor->element_type, &tensor->value))) return 1;
+  if (tensor->bound_shape == NULL) {
+    tensor->bound_shape = (int64_t*)malloc((tensor->rank > 0 ? tensor->rank : 1) * sizeof(int64_t));
+    if (tensor->bound_shape == NULL) {
+      return fortonnx_store_message(session, "failed to allocate a bound shape");
+    }
+  }
+  memcpy(tensor->bound_shape, shape, tensor->rank * sizeof(int64_t));
+  tensor->data = data;
   if (is_input) {
     return fortonnx_store_status(
         session, session->api->BindInput(session->binding, tensor->name, tensor->value));
@@ -636,9 +656,80 @@ int fortonnx_session_bind(
       opaque, input, output, memory_backend, input_shape, 2, output_shape, 2);
 }
 
+static FortonnxTensor* bound_tensor(FortonnxSession* session, size_t index) {
+  return index < session->input_count ? &session->inputs[index]
+                                      : &session->outputs[index - session->input_count];
+}
+
+/* Run options of the captured graph that belongs to the present binding; a new binding takes the next graph
+   (*created = 1: the caller gives its place back if the first run fails, since nothing was captured for it). */
+static int cuda_graph_run_options(FortonnxSession* session, OrtRunOptions** selected, int* created) {
+  size_t count = session->input_count + session->output_count;
+  size_t length = 0;
+  size_t slot, index, offset;
+  FortonnxGraphSlot* item;
+  char text[16];
+
+  for (index = 0; index < count; ++index) length += bound_tensor(session, index)->rank;
+  for (slot = 0; slot < session->graph_count; ++slot) {
+    item = &session->graphs[slot];
+    offset = 0;
+    for (index = 0; index < count; ++index) {
+      FortonnxTensor* tensor = bound_tensor(session, index);
+      if (item->data[index] != tensor->data ||
+          memcmp(item->shape + offset, tensor->bound_shape, tensor->rank * sizeof(int64_t)) != 0) break;
+      offset += tensor->rank;
+    }
+    if (index == count) {
+      *selected = item->run_options;
+      return 0;
+    }
+  }
+  if (session->graph_count == session->graph_limit) {
+    return fortonnx_store_message(
+        session, session->graph_limit == 1
+                     ? "cuda_graph: a TensorRT model keeps one captured graph, which belongs to one set of buffer "
+                       "addresses and shapes; bind the same buffers in every run or switch cuda_graph off"
+                     : "cuda_graph: too many distinct buffer bindings (a captured graph belongs to one set of "
+                       "buffer addresses and shapes); bind a fixed set of buffers or switch cuda_graph off");
+  }
+  item = &session->graphs[session->graph_count];
+  item->run_options = NULL;
+  item->data = (void**)malloc((count > 0 ? count : 1) * sizeof(void*));
+  item->shape = (int64_t*)malloc((length > 0 ? length : 1) * sizeof(int64_t));
+  if (item->data == NULL || item->shape == NULL) {
+    release_graph_slot(session, item);
+    return fortonnx_store_message(session, "failed to allocate a CUDA graph binding record");
+  }
+  offset = 0;
+  for (index = 0; index < count; ++index) {
+    FortonnxTensor* tensor = bound_tensor(session, index);
+    item->data[index] = tensor->data;
+    memcpy(item->shape + offset, tensor->bound_shape, tensor->rank * sizeof(int64_t));
+    offset += tensor->rank;
+  }
+  snprintf(text, sizeof(text), "%d", ++session->graph_ids);
+  if (fortonnx_store_status(session, session->api->CreateRunOptions(&item->run_options)) ||
+      fortonnx_store_status(
+          session, session->api->AddRunConfigEntry(item->run_options, "gpu_graph_id", text)) ||
+      (session->asynchronous &&
+       fortonnx_store_status(
+           session, session->api->AddRunConfigEntry(
+                        item->run_options, "disable_synchronize_execution_providers", "1")))) {
+    release_graph_slot(session, item);
+    return 1;
+  }
+  session->graph_count += 1;
+  *created = 1;
+  *selected = item->run_options;
+  return 0;
+}
+
 int fortonnx_session_run(void* opaque) {
   FortonnxSession* session = (FortonnxSession*)opaque;
+  OrtRunOptions* run_options;
   size_t index;
+  int new_graph = 0; /* this run is the first of its binding under cuda_graph */
   if (session == NULL) {
     return fortonnx_store_message(session, "invalid session");
   }
@@ -652,12 +743,17 @@ int fortonnx_session_run(void* opaque) {
       return fortonnx_store_message(session, "not all output buffers have been bound");
     }
   }
-  if (!session->asynchronous &&
+  run_options = session->run_options;
+  if (session->cuda_graph && cuda_graph_run_options(session, &run_options, &new_graph)) return 1;
+  if ((!session->asynchronous &&
+       fortonnx_store_status(
+           session, session->api->SynchronizeBoundInputs(session->binding))) ||
       fortonnx_store_status(
-          session, session->api->SynchronizeBoundInputs(session->binding))) return 1;
-  if (fortonnx_store_status(
           session, session->api->RunWithBinding(
-                       session->session, session->run_options, session->binding))) return 1;
+                       session->session, run_options, session->binding))) {
+    if (new_graph) release_graph_slot(session, &session->graphs[--session->graph_count]);
+    return 1;
+  }
   if (!session->asynchronous &&
       fortonnx_store_status(
           session, session->api->SynchronizeBoundOutputs(session->binding))) return 1;

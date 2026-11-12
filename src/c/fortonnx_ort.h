@@ -61,7 +61,8 @@ void* fortonnx_session_create_gpu_with_custom_ops(
     int tensorrt_fp16,
     int tensorrt_engine_cache,
     const char* tensorrt_cache_path,
-    const char* custom_op_library);
+    const char* custom_op_library,
+    int cuda_graph);
 
 int fortonnx_session_get_features(
     void* session, int64_t* input_features, int64_t* output_features);

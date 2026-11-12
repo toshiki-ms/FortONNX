@@ -1066,3 +1066,214 @@ def test_export_preserves_fp64_and_bool_mixed_io(tmp_path: Path) -> None:
             assert actual[1].dtype == np.bool_
             np.testing.assert_array_equal(actual[0], state + 2**-42)
             np.testing.assert_array_equal(actual[1], enabled)
+
+
+def _operators(path: Path) -> list[str]:
+    return [node.op_type for node in onnx.load(path).graph.node]
+
+
+@pytest.mark.parametrize("mode", ["default", "clip", "fill"])
+def test_generic_export_gathers_one_axis_with_gather(tmp_path: Path, mode: str) -> None:
+    columns = np.asarray([[4, 0, 2], [1, 1, 5]], dtype=np.int32)
+    transposed = jax.lax.GatherDimensionNumbers(
+        offset_dims=(0, 1), collapsed_slice_dims=(1,), start_index_map=(1,)
+    )
+
+    def model(inputs: jax.Array, picks: jax.Array) -> tuple[jax.Array, ...]:
+        if mode == "default":
+            middle = inputs[:, picks]
+        elif mode == "fill":
+            middle = jnp.take(inputs, picks, axis=1, mode="fill", fill_value=np.float32(-7))
+        else:
+            middle = jnp.take(inputs, picks, axis=1, mode="clip")
+        last = jax.lax.gather(inputs, picks[:, None], transposed, slice_sizes=(4, 1, 6), mode="clip")
+        return middle, inputs[:, :, columns], inputs[jnp.clip(picks, 0, 3)], last
+
+    path = tmp_path / f"gather_axis_{mode}.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((4, 5, 6), jnp.float32), jax.ShapeDtypeStruct((3,), jnp.int32)),
+        path,
+        input_names=("values", "picks"),
+        output_names=("middle", "constant", "first", "last"),
+        dynamic_batch=False,
+    )
+    operators = _operators(path)
+    assert "GatherND" not in operators
+    assert operators.count("Gather") == 4
+    values = np.arange(120, dtype=np.float32).reshape(4, 5, 6)
+    picks = np.asarray([3, 0, 2] if mode == "default" else [-9, 2, 99], dtype=np.int32)
+    actual = _session(path).run(None, {"values": values, "picks": picks})
+    assert actual[3].shape == (4, 6, 3)
+    for got, expected in zip(actual, model(values, picks)):
+        np.testing.assert_array_equal(got, np.asarray(expected))
+
+
+def test_generic_export_contracts_one_axis_pair_with_matmul(tmp_path: Path) -> None:
+    banded = (np.arange(60, dtype=np.float32).reshape(3, 4, 5) - 20.0) / 16.0
+    mixing = (np.arange(10, dtype=np.float32).reshape(5, 2) - 4.0) / 8.0
+    cube = (np.arange(40, dtype=np.float32).reshape(5, 2, 4) - 9.0) / 4.0
+
+    def model(hidden: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+        per_band = jnp.einsum("nbi,bio->nbo", hidden, banded)
+        mixed = jnp.tensordot(per_band, mixing, axes=((2,), (0,)))
+        general = jnp.tensordot(per_band, cube, axes=((2,), (0,)))
+        return per_band, mixed, general
+
+    path = tmp_path / "contraction.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((2, 3, 4), jnp.float32),),
+        path,
+        input_names=("hidden",),
+        output_names=("per_band", "mixed", "general"),
+    )
+    operators = _operators(path)
+    assert operators.count("MatMul") == 2
+    assert operators.count("Einsum") == 1
+    hidden = np.linspace(-1.0, 1.0, 5 * 3 * 4, dtype=np.float32).reshape(5, 3, 4)
+    actual = _session(path).run(None, {"hidden": hidden})
+    for got, expected in zip(actual, model(hidden)):
+        np.testing.assert_allclose(got, np.asarray(expected), rtol=1.0e-5, atol=1.0e-6)
+
+
+def test_generic_export_merges_slices_of_one_axis_into_split(tmp_path: Path) -> None:
+    def model(inputs: jax.Array) -> tuple[jax.Array, ...]:
+        head, middle, tail = inputs[:, :1], inputs[:, 1:3], inputs[:, 3:]
+        overlap = inputs[:, 2:5]
+        return head * 2.0, middle + 1.0, tail - overlap
+
+    def partial(inputs: jax.Array) -> jax.Array:
+        return inputs[:, :2] + inputs[:, 4:]
+
+    path = tmp_path / "split.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((2, 6), jnp.float32),),
+        path,
+        input_names=("inputs",),
+        output_names=("head", "middle", "tail"),
+    )
+    operators = _operators(path)
+    assert operators.count("Split") == 1
+    assert operators.count("Slice") == 1
+    inputs = np.arange(30, dtype=np.float32).reshape(5, 6)
+    actual = _session(path).run(None, {"inputs": inputs})
+    for got, expected in zip(actual, model(inputs)):
+        np.testing.assert_array_equal(got, np.asarray(expected))
+
+    partial_path = tmp_path / "slices.onnx"
+    export_jax_to_onnx(
+        partial,
+        (jax.ShapeDtypeStruct((2, 6), jnp.float32),),
+        partial_path,
+        input_names=("inputs",),
+        output_names=("sum",),
+    )
+    operators = _operators(partial_path)
+    assert "Split" not in operators
+    assert operators.count("Slice") == 2
+    actual = _session(partial_path).run(None, {"inputs": inputs})[0]
+    np.testing.assert_array_equal(actual, np.asarray(partial(inputs)))
+
+
+def test_generic_export_drops_nodes_that_reach_no_output(tmp_path: Path) -> None:
+    def model(inputs: jax.Array) -> jax.Array:
+        unused = jnp.log(inputs * inputs + 1.0)
+        del unused
+        return jax.nn.logsumexp(inputs, axis=1)
+
+    path = tmp_path / "unused.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((2, 5), jnp.float32),),
+        path,
+        input_names=("inputs",),
+        output_names=("output",),
+    )
+    graph = onnx.load(path).graph
+    produced = {name for node in graph.node for name in node.output}
+    read = {name for node in graph.node for name in node.input} | {item.name for item in graph.output}
+    assert produced <= read
+    assert {item.name for item in graph.initializer} <= read
+    assert "Sign" not in _operators(path)
+    inputs = np.linspace(-3.0, 4.0, 15, dtype=np.float32).reshape(3, 5)
+    actual = _session(path).run(None, {"inputs": inputs})[0]
+    np.testing.assert_allclose(actual, np.asarray(model(inputs)), rtol=1.0e-6, atol=1.0e-6)
+
+
+def test_generic_export_leaves_broadcasts_to_elementwise_operators(tmp_path: Path) -> None:
+    scale = jnp.asarray([1.0, -2.0, 0.5], jnp.float32)
+
+    def model(inputs: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
+        scaled = inputs * scale[None, :]
+        floored = jnp.where(inputs < 0.25, 0.25, scaled)
+        constant = jnp.ones((inputs.shape[0], 3), jnp.float32) * 2.0
+        return scaled, floored, constant
+
+    path = tmp_path / "broadcast.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((2, 3), jnp.float32),),
+        path,
+        input_names=("inputs",),
+        output_names=("scaled", "floored", "constant"),
+    )
+    # Only the constant output has no operand of the full shape and keeps its Expand.
+    assert _operators(path).count("Expand") == 1
+    inputs = np.linspace(-1.0, 1.0, 15, dtype=np.float32).reshape(5, 3)
+    actual = _session(path).run(None, {"inputs": inputs})
+    for got, expected in zip(actual, model(inputs)):
+        np.testing.assert_array_equal(got, np.asarray(expected))
+
+
+def test_generic_export_keeps_the_expand_that_adds_the_batch_axis(tmp_path: Path) -> None:
+    # bias and bias > 0 (traced, labelled like a batch axis) have the output shape only at the example batch size 1.
+    bias = jnp.asarray([[1.0, -2.0, 0.5]], jnp.float32)
+
+    def model(inputs: jax.Array) -> tuple[jax.Array, jax.Array]:
+        total = jnp.broadcast_to(jnp.sum(inputs), (inputs.shape[0], 3))   # this Expand adds the batch axis
+        return total + bias, jnp.where(bias > 0.0, total, bias)
+
+    path = tmp_path / "batch_broadcast.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((1, 3), jnp.float32),),
+        path,
+        input_names=("inputs",),
+        output_names=("shifted", "selected"),
+    )
+    inputs = np.arange(15, dtype=np.float32).reshape(5, 3) / 8.0
+    actual = _session(path).run(None, {"inputs": inputs})
+    for got, expected in zip(actual, model(inputs)):
+        assert got.shape == (5, 3)
+        np.testing.assert_array_equal(got, np.asarray(expected))
+
+
+def test_generic_export_keeps_the_expand_after_a_nested_call(tmp_path: Path) -> None:
+    # Of the two outputs of the jitted helper only the first has the batch axis of the input; the second has the
+    # batch size of the example (1), although the call receives the input.
+    bias = jnp.asarray([[1.0, -2.0, 0.5]], jnp.float32)
+
+    @jax.jit
+    def helper(inputs: jax.Array) -> tuple[jax.Array, jax.Array]:
+        return 2.0 * inputs, bias > 0.0
+
+    def model(inputs: jax.Array) -> tuple[jax.Array, jax.Array]:
+        doubled, positive = helper(inputs)
+        total = jnp.broadcast_to(jnp.sum(inputs), (inputs.shape[0], 3))   # this Expand adds the batch axis
+        return doubled + total, jnp.where(positive, total, bias)
+
+    path = tmp_path / "nested_batch_broadcast.onnx"
+    export_jax_to_onnx(
+        model,
+        (jax.ShapeDtypeStruct((1, 3), jnp.float32),),
+        path,
+        input_names=("inputs",),
+        output_names=("shifted", "selected"),
+    )
+    inputs = np.arange(15, dtype=np.float32).reshape(5, 3) / 8.0
+    actual = _session(path).run(None, {"inputs": inputs})
+    for got, expected in zip(actual, model(inputs)):
+        assert got.shape == (5, 3)
+        np.testing.assert_array_equal(got, np.asarray(expected))

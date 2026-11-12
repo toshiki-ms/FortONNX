@@ -2,6 +2,16 @@
 
 ## 0.1.0 - unreleased
 
+- Add the `cuda_graph` option of the CUDA and TensorRT backends: CUDA Graph
+  capture and replay, one graph per binding with the CUDA provider and one
+  binding per model with a TensorRT engine; models with random-number
+  operators, and with GatherND on the CUDA provider, are refused.
+- JAX export: Gather instead of GatherND for one indexed axis, MatMul instead
+  of Einsum for one contracted axis pair, one Split for slices that
+  partition an axis, no Expand before an elementwise operator that
+  broadcasts (unless the Expand adds a dynamic axis), and no nodes whose
+  results reach no graph output.
+
 - Add zero-copy float64 and one-byte bool tensors on CPU and CUDA, with
   type-checked C entry points and Fortran array/view generics.
 - Preserve existing float32 APIs and add model tensor element-type inspection.

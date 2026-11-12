@@ -30,6 +30,9 @@ module fortonnx
     logical :: tensorrt_engine_cache = .false.
     character(len=:), allocatable :: tensorrt_cache_path
     type(c_ptr) :: user_compute_stream = c_null_ptr
+    ! CUDA backend: capture the kernel launches of a run as a CUDA graph and replay it in later runs
+    ! (one graph per distinct set of bound buffers and shapes).
+    logical :: cuda_graph = .false.
   end type fortonnx_options
 
   type, public :: fortonnx_status
@@ -423,6 +426,12 @@ contains
           'thread counts must satisfy intra_op >= 0 and inter_op >= 1')
       return
     end if
+    if (options%cuda_graph .and. options%backend /= fortonnx_cuda .and. &
+        options%backend /= fortonnx_tensorrt) then
+      call set_status(status, fortonnx_invalid_argument, &
+          'cuda_graph is an option of the CUDA and TensorRT backends')
+      return
+    end if
     if (options%tensorrt_engine_cache) then
       if (.not. allocated(options%tensorrt_cache_path)) then
         call set_status(status, fortonnx_invalid_argument, &
@@ -502,7 +511,7 @@ contains
           merge(1_c_int, 0_c_int, self%options%use_tf32), &
           merge(1_c_int, 0_c_int, self%options%tensorrt_fp16), &
           merge(1_c_int, 0_c_int, self%options%tensorrt_engine_cache), c_cache_path, &
-          c_custom_op_library)
+          c_custom_op_library, merge(1_c_int, 0_c_int, self%options%cuda_graph))
     end if
     if (.not. c_associated(candidate%session)) then
       call set_c_error(status, 'failed to load ' // trim(model_path), c_null_ptr)
