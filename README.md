@@ -322,11 +322,29 @@ preserve semantics. It is general over supported graph topology, parameters,
 PyTrees, and dynamic batch sizes, but it is not a complete JAX implementation.
 See `docs/jax-export.md`.
 
+## Kernel generation
+
+For a graph that acts on every row independently, `fortonnx_kernelgen` writes one CUDA kernel that evaluates a
+whole row and an ONNX Runtime custom operator that runs it:
+
+```sh
+python -m fortonnx_kernelgen --output-dir generated net=model.onnx
+```
+
+```fortran
+call runtime%load('net', 'generated/net.onnx', status, custom_op_library='generated/libkernels.so')
+```
+
+The program still runs the graph through FortONNX; without the library the same file runs on the standard
+operators. A program with its own device arrays can also call the kernel directly: the library reads the same
+graph file and needs no ONNX Runtime for that. With `--approximate-functions --tensor-cores` the kernel is written the way a hand-tuned kernel for
+Hopper GPUs is (tensor cores, base-2 instructions). See `docs/kernel-generation.md`.
+
 ## Repository layout
 
 ```text
 src/                  portable Fortran API and C bridge
-python/               separately installable JAX exporter
+python/               separately installable JAX exporter and kernel generator
 examples/             applications and scientific package example
 tests/                deterministic CPU and exporter tests
 docs/                 runtime details and scientific model-package specification

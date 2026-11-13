@@ -285,7 +285,7 @@ ifeq ($(BACKEND),tensorrt)
 endif
 
 test-python:
-	PYTHONPATH=python/src $(PYTHON) -m pytest -q tests/test_export.py tests/test_scientific_package_example.py tests/test_scientific_package_validator.py tests/test_fp64_package.py
+	PYTHONPATH=python/src $(PYTHON) -m pytest -q tests/test_export.py tests/test_scientific_package_example.py tests/test_scientific_package_validator.py tests/test_fp64_package.py tests/test_kernelgen.py
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/fortonnx

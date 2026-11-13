@@ -2,6 +2,16 @@
 
 ## 0.1.0 - unreleased
 
+- Add `fortonnx_kernelgen`: for an ONNX graph that acts on every row
+  independently, one fused CUDA kernel per row, the ONNX Runtime custom
+  operator that runs it, and the graph that uses the operator (with the
+  original graph as the operator's function). Unsupported and non-row-wise
+  operators stop the generation. Optionally the kernel uses the tensor cores
+  of Hopper GPUs for its product sums and the base-2 instructions for its
+  functions, in the forms of hand-written kernels. The library also has a
+  direct entry (four C functions) that runs the kernel of a graph file
+  without ONNX Runtime.
+
 - Add the `cuda_graph` option of the CUDA and TensorRT backends: CUDA Graph
   capture and replay, one graph per binding with the CUDA provider and one
   binding per model with a TensorRT engine; models with random-number
