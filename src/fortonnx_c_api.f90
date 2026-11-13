@@ -86,7 +86,7 @@ module fortonnx_c_api
 
     function c_fortonnx_session_create_gpu_with_custom_ops(model_path, backend, &
         device_id, user_stream, use_tf32, trt_fp16, trt_cache, cache_path, &
-        custom_op_library) bind(C, name='fortonnx_session_create_gpu_with_custom_ops') &
+        custom_op_library, cuda_graph) bind(C, name='fortonnx_session_create_gpu_with_custom_ops') &
         result(session)
       import :: c_char, c_int, c_ptr
       character(kind=c_char), intent(in) :: model_path(*)
@@ -94,6 +94,7 @@ module fortonnx_c_api
       type(c_ptr), value :: user_stream
       integer(c_int), value :: use_tf32, trt_fp16, trt_cache
       character(kind=c_char), intent(in) :: cache_path(*), custom_op_library(*)
+      integer(c_int), value :: cuda_graph
       type(c_ptr) :: session
     end function c_fortonnx_session_create_gpu_with_custom_ops
 

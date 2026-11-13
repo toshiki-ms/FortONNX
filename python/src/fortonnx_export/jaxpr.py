@@ -100,6 +100,9 @@ _REDUCTION_OPS = {
     "reduce_prod": "ReduceProd",
 }
 
+# Operators whose output axes are the trailing-aligned axes of their operands (labels: elementwise_dynamic_axes).
+_ELEMENTWISE_PRIMITIVES = frozenset(_BINARY_OPS) | {"ne", "select_n", "clamp"}
+
 _CALL_PRIMITIVES = {
     "call",
     "closed_call",
@@ -158,6 +161,13 @@ class _Translator:
             raise ValueError("the generic exporter requires ONNX opset >= 18")
         self.opset = opset
         self.nodes: list[onnx.NodeProto] = []
+        # Slices of one axis by output name: (source, axis, start, end, axis size); see merge_slices.
+        self.slice_parts: dict[str, tuple[str, int, int, int, int]] = {}
+        # Operand of a broadcast by output name, before its Expand; see elementwise_operands.
+        self.broadcast_operands: dict[str, str] = {}
+        self.broadcast_added_axes: dict[str, frozenset[int]] = {}
+        # Dynamic axes of a value (by name) that a graph input backs; see note_runtime_axes.
+        self.runtime_axes: dict[str, frozenset[int]] = {}
         self.initializers: list[onnx.TensorProto] = []
         self.env: dict[Any, _Value] = {}
         self.counter = 0
@@ -219,6 +229,7 @@ class _Translator:
     ) -> None:
         self.input_shapes = {name: _shape(value.aval) for value, name in zip(input_values, input_names)}
         for value, name in zip(input_values, input_names):
+            self.runtime_axes[value.name] = frozenset(value.dynamic_axes)
             for axis, symbol in value.dynamic_axes.items():
                 source = self.symbol_sources.get(symbol)
                 if source is None or source[2] < 0:
@@ -292,6 +303,70 @@ class _Translator:
                     result[axis] = symbol
         return result
 
+    def elementwise_operands(self, inputs: Sequence[_Value], output_shape: Sequence[int]) -> list[str]:
+        """Names of the operands of an elementwise node.
+
+        A broadcast operand is read before its Expand when another operand already has the output shape:
+        ONNX broadcasting then gives the same result, and the Expand is not written if nothing else reads it.
+        The other operand must also have every dynamic axis that the Expand adds as a runtime axis (see
+        note_runtime_axes); an operand that has the output shape only at the example batch size (a (1, n)
+        constant, or a value computed from constants, also when a nested call returns it) does not replace
+        the Expand.
+        """
+        shape = tuple(output_shape)
+        names = [value.name for value in inputs]
+        added = frozenset().union(*(self.broadcast_added_axes.get(name, frozenset()) for name in names))
+        if not any(name not in self.broadcast_operands and _shape(value.aval) == shape
+                   and added <= self.runtime_axes.get(name, frozenset()) for name, value in zip(names, inputs)):
+            return names
+        return [self.broadcast_operands.get(name, name) for name in names]
+
+    def note_runtime_axes(self, equation: Any, outputs: Sequence[_Value]) -> None:
+        """Record the dynamic axes of an equation's outputs that are proven to have the runtime size.
+
+        A dynamic label alone is not proof: elementwise_dynamic_axes also labels a leading axis whose example
+        size equals that of a dynamic input axis, which a (1, n) value computed from constants has at the
+        example batch size 1, and the other translators copy the labels of their operands, such a label
+        included. Proven are the dynamic axes of the graph inputs, the axes that an Expand of
+        translate_broadcast sizes at run time, and what follows from them:
+          elementwise operator: an output axis whose aligned operand axis is a runtime axis of the same size;
+          nested call: what the translation of its JAXPR recorded for each output (nothing is added here);
+          control flow: nothing;
+          other equations (their output labels are copies of operand labels): the labelled output axes whose
+          symbol a runtime axis of an operand has, if every labelled axis of every operand is a runtime axis.
+        """
+        primitive = equation.primitive.name
+        if primitive in _CALL_PRIMITIVES or primitive in {"broadcast_in_dim", "cond", "scan", "while"}:
+            return
+        operands: list[_Value] = []
+        for atom in equation.invars:
+            value = None if isinstance(atom, jax_core.Literal) else self.env.get(atom)
+            if value is not None:
+                operands.append(value)
+        proven = [self.runtime_axes.get(value.name, frozenset()) for value in operands]
+        copied = all(value.dynamic_axes.keys() <= axes for value, axes in zip(operands, proven))
+        symbols = {
+            value.dynamic_axes[axis]
+            for value, axes in zip(operands, proven)
+            for axis in axes & value.dynamic_axes.keys()
+        }
+        for output in outputs:
+            shape = _shape(output.aval)
+            if primitive in _ELEMENTWISE_PRIMITIVES:
+                backed: set[int] = set()
+                for value, axes in zip(operands, proven):
+                    input_shape = _shape(value.aval)
+                    shift = len(shape) - len(input_shape)
+                    backed.update(
+                        shift + axis for axis in axes if shift >= 0 and input_shape[axis] == shape[shift + axis]
+                    )
+                backed.intersection_update(output.dynamic_axes)
+            elif copied:
+                backed = {axis for axis, symbol in output.dynamic_axes.items() if symbol in symbols}
+            else:
+                backed = set()
+            self.runtime_axes[output.name] = self.runtime_axes.get(output.name, frozenset()) | backed
+
     def translate_jaxpr(
         self,
         jaxpr: jax_core.Jaxpr,
@@ -322,6 +397,7 @@ class _Translator:
                 raise JaxOnnxExportError(f"output count mismatch while translating {equation}")
             for variable, value in zip(equation.outvars, outputs):
                 self.bind(variable, value)
+            self.note_runtime_axes(equation, outputs)
         return [self.read(variable) for variable in jaxpr.outvars]
 
     def unsupported(self, equation: Any, reason: str = "") -> UnsupportedJaxPrimitive:
@@ -517,14 +593,17 @@ class _Translator:
             output = self.make_value(outvar, primitive, dynamic)
             attributes = {"fmod": 1} if primitive == "rem" else {}
             self.add_node(
-                _BINARY_OPS[primitive], [value.name for value in inputs], [output.name], **attributes
+                _BINARY_OPS[primitive],
+                self.elementwise_operands(inputs, _shape(outvar.aval)),
+                [output.name],
+                **attributes,
             )
             return [output]
         if primitive == "ne":
             dynamic = self.elementwise_dynamic_axes(inputs, _shape(outvar.aval))
             equal = self.fresh("equal")
             output = self.make_value(outvar, "not_equal", dynamic)
-            self.add_node("Equal", [value.name for value in inputs], [equal])
+            self.add_node("Equal", self.elementwise_operands(inputs, _shape(outvar.aval)), [equal])
             self.add_node("Not", [equal], [output.name])
             return [output]
         if primitive == "not":
@@ -565,7 +644,8 @@ class _Translator:
                 raise self.unsupported(equation, "only boolean two-way select_n is supported")
             dynamic = self.elementwise_dynamic_axes(inputs, _shape(outvar.aval))
             output = self.make_value(outvar, "where", dynamic)
-            self.add_node("Where", [inputs[0].name, inputs[2].name, inputs[1].name], [output.name])
+            condition, if_false, if_true = self.elementwise_operands(inputs, _shape(outvar.aval))
+            self.add_node("Where", [condition, if_true, if_false], [output.name])
             return [output]
         if primitive == "clamp":
             if len(inputs) != 3:
@@ -1384,8 +1464,16 @@ class _Translator:
             self.add_node("Unsqueeze", [current, axes_name], [unsqueezed])
             current = unsqueezed
         output = self.make_value(outvar, "broadcast", dynamic)
+        self.broadcast_operands[output.name] = current
         operand_dynamic = {dimensions[axis] for axis in value.dynamic_axes}
         new_dynamic = {axis: symbol for axis, symbol in dynamic.items() if axis not in operand_dynamic}
+        self.broadcast_added_axes[output.name] = frozenset(new_dynamic)
+        # Runtime axes: the new dynamic axes (the Expand below gives them the runtime size) and those of the operand.
+        self.runtime_axes[output.name] = frozenset(new_dynamic) | {
+            dimensions[axis]
+            for axis in self.runtime_axes.get(value.name, frozenset())
+            if _shape(value.aval)[axis] == output_shape[dimensions[axis]]
+        }
         zero_source = self.batch_zeros(new_dynamic, len(output_shape), _dtype(outvar.aval)) if new_dynamic else None
         if new_dynamic and zero_source is None:
             shape_name = self.shape_tensor(output_shape, dynamic, "broadcast")
@@ -1480,6 +1568,14 @@ class _Translator:
         steps = [1] * len(starts) if steps_param is None else [int(step) for step in steps_param]
         axes = list(range(len(starts)))
         input_shape = _shape(value.aval)
+        cut = [
+            axis
+            for axis in axes
+            if not (starts[axis] == 0 and ends[axis] == input_shape[axis] and steps[axis] == 1)
+        ]
+        part = None
+        if len(cut) == 1 and steps[cut[0]] == 1 and ends[cut[0]] > starts[cut[0]] and cut[0] not in value.dynamic_axes:
+            part = (value.name, cut[0], starts[cut[0]], ends[cut[0]], input_shape[cut[0]])
         dynamic: dict[int, str] = {}
         for axis, symbol in value.dynamic_axes.items():
             if starts[axis] == 0 and ends[axis] == input_shape[axis] and steps[axis] == 1:
@@ -1491,7 +1587,60 @@ class _Translator:
             for label, array in (("starts", starts), ("ends", ends), ("axes", axes), ("steps", steps))
         ]
         self.add_node("Slice", [value.name, *names], [output.name])
+        if part is not None:
+            self.slice_parts[output.name] = part
         return output
+
+    def merge_slices(self) -> None:
+        """Replace the Slices that cut one tensor along one axis into its consecutive pieces by one Split.
+
+        Only a complete partition is merged (every element of the axis in exactly one piece), so the Split
+        moves the same data as the Slices it replaces, in one node instead of one per piece.
+        """
+        groups: dict[tuple[str, int], list[tuple[int, int, int]]] = {}
+        for position, node in enumerate(self.nodes):
+            part = self.slice_parts.get(node.output[0]) if node.op_type == "Slice" else None
+            if part is not None:
+                groups.setdefault(part[:2], []).append((part[2], part[3], position))
+        splits: dict[int, onnx.NodeProto] = {}
+        merged: set[int] = set()
+        for (source, axis), parts in groups.items():
+            size = self.slice_parts[self.nodes[parts[0][2]].output[0]][4]
+            pieces: list[tuple[int, int, int]] = []
+            for start, end, position in sorted(parts):
+                if start == (pieces[-1][1] if pieces else 0):
+                    pieces.append((start, end, position))
+            if len(pieces) < 2 or pieces[-1][1] != size:
+                continue
+            sizes = self.add_initializer(
+                np.asarray([end - start for start, end, _ in pieces], dtype=np.int64), "split_sizes"
+            )
+            first = min(position for _, _, position in pieces)
+            splits[first] = helper.make_node(
+                "Split", [source, sizes], [self.nodes[position].output[0] for _, _, position in pieces], axis=axis
+            )
+            merged.update(position for _, _, position in pieces)
+        self.nodes = [
+            splits.get(position, node)
+            for position, node in enumerate(self.nodes)
+            if position in splits or position not in merged
+        ]
+
+    def drop_unused(self, outputs: Sequence[str]) -> None:
+        """Remove the nodes whose results reach no graph output, and the initializers only they read.
+
+        A traced function can compute values it never returns (jax.nn.logsumexp computes the sign of the sum,
+        for example), and a runtime executes such nodes in every run. Nodes of custom domains are kept.
+        """
+        used = set(outputs)
+        kept: list[onnx.NodeProto] = []
+        for node in reversed(self.nodes):
+            if node.domain or any(name in used for name in node.output):
+                used.update(name for name in node.input if name)
+                used.update(_subgraph_reads(node))
+                kept.append(node)
+        self.nodes = kept[::-1]
+        self.initializers = [item for item in self.initializers if item.name in used]
 
     def translate_reverse(self, equation: Any, value: _Value, outvar: Any) -> _Value:
         axes = tuple(int(axis) for axis in equation.params["dimensions"])
@@ -1761,18 +1910,41 @@ class _Translator:
             mode,
             "gather_nd",
         )
-        operand_permutation = (*start_index_map, *remaining_axes)
-        current_operand = operand.name
-        if operand_permutation != tuple(range(len(operand_shape))):
-            current_operand = self.fresh("gather_nd_operand")
-            self.add_node(
-                "Transpose",
-                [operand.name],
-                [current_operand],
-                perm=operand_permutation,
+        batch_rank = len(index_batch_shape)
+        if index_depth == 1:
+            # One indexed axis: Gather along it, with the operand as it is. Its result has the operand axes
+            # before the indexed one, the index axes, then the operand axes after it. (GatherND is kept for
+            # several indexed axes only: its CUDA kernel in ONNX Runtime copies a host temporary in every run,
+            # which a replayed CUDA graph cannot repeat.)
+            axis = start_index_map[0]
+            coordinate_axis = self.add_initializer(
+                np.asarray([batch_rank], dtype=np.int64), "gather_coordinate_axis"
             )
-        gathered = self.fresh("gather_nd_values")
-        self.add_node("GatherND", [current_operand, normalized], [gathered])
+            squeezed = self.fresh("gather_indices")
+            self.add_node("Squeeze", [normalized, coordinate_axis], [squeezed])
+            gathered = self.fresh("gather_values")
+            self.add_node("Gather", [operand.name, squeezed], [gathered], axis=axis)
+            index_positions = [axis + offset for offset in range(batch_rank)]
+            remaining_positions = [
+                index if index < axis else index + batch_rank for index in range(len(remaining_axes))
+            ]
+            trailing_rank = len(remaining_axes) - axis
+        else:
+            operand_permutation = (*start_index_map, *remaining_axes)
+            current_operand = operand.name
+            if operand_permutation != tuple(range(len(operand_shape))):
+                current_operand = self.fresh("gather_nd_operand")
+                self.add_node(
+                    "Transpose",
+                    [operand.name],
+                    [current_operand],
+                    perm=operand_permutation,
+                )
+            gathered = self.fresh("gather_nd_values")
+            self.add_node("GatherND", [current_operand, normalized], [gathered])
+            index_positions = list(range(batch_rank))
+            remaining_positions = [batch_rank + index for index in range(len(remaining_axes))]
+            trailing_rank = len(remaining_axes)
         current = gathered
         if valid is not None:
             fill_value = equation.params.get("fill_value")
@@ -1780,9 +1952,7 @@ class _Translator:
                 raise self.unsupported(
                     equation, "fill/drop gather requires an explicit fill value"
                 )
-            condition = self.broadcast_trailing_mask(
-                valid, len(remaining_axes), "gather_nd"
-            )
+            condition = self.broadcast_trailing_mask(valid, trailing_rank, "gather_nd")
             fill = self.add_initializer(
                 np.asarray(fill_value, dtype=_dtype(operand.aval)),
                 "gather_nd_fill",
@@ -1792,10 +1962,10 @@ class _Translator:
             current = filled
 
         canonical_to_output = [0] * output_rank
-        for canonical_axis, output_axis in enumerate(index_output_dims):
-            canonical_to_output[output_axis] = canonical_axis
+        for index_axis, output_axis in enumerate(index_output_dims):
+            canonical_to_output[output_axis] = index_positions[index_axis]
         for remaining_index, output_axis in enumerate(offset_dims):
-            canonical_to_output[output_axis] = len(index_batch_shape) + remaining_index
+            canonical_to_output[output_axis] = remaining_positions[remaining_index]
         dynamic: dict[int, str] = {}
         for input_axis, symbol in start_indices.dynamic_axes.items():
             if input_axis < len(index_batch_shape):
@@ -2165,6 +2335,19 @@ class _Translator:
         if standard:
             self.add_node("MatMul", [lhs.name, rhs.name], [output.name])
             return output
+        lhs_free = [axis for axis in range(lhs_rank) if axis not in lhs_contract and axis not in lhs_batch]
+        rhs_free = [axis for axis in range(rhs_rank) if axis not in rhs_contract and axis not in rhs_batch]
+        if len(lhs_contract) == 1 and (
+            (len(lhs_batch) == 0 and len(rhs_free) <= 1)
+            or (len(lhs_batch) > 0 and len(lhs_free) == 1 and len(rhs_free) == 1)
+        ):
+            # One contracted axis pair: MatMul with that axis last on the left and first of the matrix axes on
+            # the right. The result (batch, left free, right free) has the layout of dot_general, and both
+            # operands carry the same batch axes (a matrix product ONNX Runtime runs without Einsum's host work).
+            left = self.transpose_value(lhs, (*lhs_batch, *lhs_free, *lhs_contract), "dot_lhs")
+            right = self.transpose_value(rhs, (*rhs_batch, *rhs_contract, *rhs_free), "dot_rhs")
+            self.add_node("MatMul", [left.name, right.name], [output.name])
+            return output
 
         labels = iter("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
         if lhs_rank + rhs_rank > 52:
@@ -2249,6 +2432,18 @@ class _Translator:
         )
         self.add_node("Transpose", [canonical_output], [output.name], perm=inverse_output)
         return output
+
+
+def _subgraph_reads(node: onnx.NodeProto) -> set[str]:
+    """Names read by the nodes of the subgraphs of a control-flow node (they may belong to the outer graph)."""
+    names: set[str] = set()
+    for attribute in node.attribute:
+        for graph in (attribute.g, *attribute.graphs):
+            names.update(item.name for item in graph.output)
+            for inner in graph.node:
+                names.update(name for name in inner.input if name)
+                names.update(_subgraph_reads(inner))
+    return names
 
 
 def _const_values(translator: _Translator, closed_jaxpr: jax_core.ClosedJaxpr) -> list[_Value]:
@@ -2348,6 +2543,8 @@ def export_jax_to_onnx(
             helper.make_tensor_value_info(name, _onnx_dtype(_dtype(value.aval)), dimensions)
         )
 
+    translator.drop_unused(output_name_tuple)
+    translator.merge_slices()
     graph = helper.make_graph(
         translator.nodes,
         "jaxpr_exported_graph",

@@ -282,7 +282,7 @@ interface used on CPU.
 TensorRT is registered first and CUDA remains its fallback for unsupported
 nodes. Graphs containing FP64 types/constants bypass TensorRT and use CUDA
 to avoid TensorRT precision reduction; FP64 support depends on CUDA kernels
-for the graph operators. CPU fallback is disabled for device-pointer sessions. `use_tf32`, TensorRT FP16, and engine/timing cache settings live in
+for the graph operators. CPU fallback is disabled for device-pointer sessions. `use_tf32`, `cuda_graph` (CUDA Graph replay with CUDA and TensorRT, see `docs/backends.md`), TensorRT FP16, and engine/timing cache settings live in
 `fortonnx_options`, so model-management code does not change when the backend
 changes.
 

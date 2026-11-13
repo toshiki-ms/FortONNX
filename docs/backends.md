@@ -21,6 +21,42 @@ synchronizes execution before `run` returns. If it is non-null, FortONNX asks
 ONNX Runtime not to synchronize providers; the caller owns and synchronizes
 the stream.
 
+### CUDA Graph replay
+
+`cuda_graph = .true.` (CUDA and TensorRT backends; the CPU backend is an error
+at `initialize`) lets ONNX Runtime capture the kernel launches of a run as a
+CUDA graph and replay it in later runs, which removes the per-node launch
+overhead of graphs with many small nodes. A captured graph belongs to one
+binding, that is one set of bound buffer addresses and shapes of a model.
+The buffer contents may change between runs, the addresses and shapes of a
+binding may not.
+
+| graph runs on | captured graphs per model | condition |
+|---|---|---|
+| CUDA provider (CUDA backend, and FP64 graphs of the TensorRT backend) | one per binding, up to 16 | every node on the CUDA provider, which device-pointer sessions already require |
+| TensorRT engine | one | every node inside the TensorRT engine (ONNX Runtime refuses the model at `load` otherwise) |
+
+A binding beyond these numbers is an error at `run`, not a replay of another
+binding's graph. A binding whose first run fails has no captured graph and
+does not count. A model that needs several bindings with TensorRT is loaded
+once per binding (under different names), or its data are copied through one
+fixed pair of buffers.
+
+A replayed graph repeats the captured launches only. `load` therefore
+refuses, when `cuda_graph` is set, a model with
+
+- RandomNormal, RandomNormalLike, RandomUniform, RandomUniformLike,
+  Bernoulli (run as its function body with RandomUniformLike), or a Dropout
+  node with a `training_mode` input (also the fused `com.microsoft` forms
+  BiasDropout, BitmaskDropout and BitmaskBiasDropout): the host draws new
+  seeds in every run, and a replay would repeat the captured numbers;
+- GatherND, when the CUDA provider runs the graph: its kernel copies a host
+  temporary to the device in every run, and a replay would read freed memory.
+
+These rules come from the kernels of ONNX Runtime 1.30, with which the option
+was verified; check the kernels of the graph operators again before using it
+with another version.
+
 ## TensorRT
 
 `fortonnx_tensorrt` registers TensorRT and then CUDA. TensorRT executes the

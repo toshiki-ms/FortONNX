@@ -11,13 +11,15 @@ primitive names. The current implementation includes:
 
 - common elementwise operations, reductions, cumulative sum, top-k, reshaping,
   static slicing, fixed-shape dynamic slicing, concatenation, and padding;
-- dot_general, including common matrix multiplication and general two-operand
-  contractions lowered through ONNX Einsum;
+- dot_general: MatMul for matrix multiplication and for one contracted axis
+  pair (with or without batch axes, after a Transpose where the layout needs
+  it), ONNX Einsum for the remaining two-operand contractions;
 - one-, two-, and three-dimensional maximum and additive pooling in
   unambiguous NCHW or NHWC layouts;
 - common NCHW/NHWC convolution;
-- indexed reads through ONNX GatherElements for take-along-axis layouts and
-  GatherND for coordinate-index layouts;
+- indexed reads through ONNX GatherElements for take-along-axis layouts,
+  Gather for coordinate indices along one axis, and GatherND for coordinate
+  indices along several axes;
 - fixed-shape dynamic updates, scatter-add, and unique-index scatter-set, with
   JAX promise-in-bounds, clip, and fill/drop index modes;
 - nested JIT/custom-JVP calls and PyTree multi-input/multi-output interfaces;
@@ -35,9 +37,19 @@ the floating-point, int8, and uint8 types supported by ONNX MaxPool.
 
 Dynamic slicing and dynamic update reproduce JAX start-index clamping but
 currently require fixed operand shapes. The GatherElements path accepts the
-take-along-axis dimension-number pattern. The GatherND path accepts coordinate
-indices without operand/index batching dimensions and requires every
-non-indexed operand axis to be selected in full. Out-of-range fill/drop gathers
+take-along-axis dimension-number pattern. The Gather/GatherND path accepts
+coordinate indices without operand/index batching dimensions and requires
+every non-indexed operand axis to be selected in full; one indexed axis
+becomes Gather along that axis with the operand as it is, several indexed
+axes become GatherND. Static slices that cut one axis of one tensor into its
+consecutive pieces are written as one Split. Nodes whose results reach no
+graph output are not written (a traced function can compute values it never
+returns), nor are the initializers only they read. A broadcast whose result
+feeds an elementwise operator next to an operand of the full shape is left to
+ONNX broadcasting, without an Expand; the Expand stays when it adds a dynamic
+axis that the other operand does not have at run time (a value computed only
+from constants has no such axis, whatever its shape at the example batch
+size). Out-of-range fill/drop gathers
 are implemented as a validity mask and ONNX Where, so invalid reads return the
 JAX fill value rather than a clipped value.
 
